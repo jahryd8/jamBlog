@@ -57,7 +57,7 @@ export default function Dashboard() {
 
         {/* My Public Posts */}
         <div 
-          onClick={() => navigate('/feed?filter=my-posts')}
+          onClick={() => navigate('/post/1')}
           className="bg-brand-lavender p-6 rounded-3xl relative group hover:-translate-y-1 hover:shadow-xl transition-all cursor-pointer flex flex-col justify-between min-h-[200px]"
         >
           <div className="flex justify-between items-start">
