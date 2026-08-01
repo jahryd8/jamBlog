@@ -18,27 +18,27 @@ export default function Dashboard() {
       {/* User Profile Banner */}
       <section className="flex flex-col md:flex-row items-center md:items-start justify-between mb-10 gap-6">
         <div className="flex items-center space-x-6">
-          <div className="w-24 h-24 rounded-full bg-brand-ink flex items-center justify-center text-brand-cream text-3xl font-serif font-bold shadow-md">
-            JD
-          </div>
-          <div>
-            <h1 className="font-serif text-3xl font-bold text-brand-ink">Jaheim's Studio</h1>
-            <p className="text-brand-ink/60 text-sm mt-1">Long-form essayist & visual journalist</p>
-          </div>
+         <div className="w-24 h-24 rounded-full bg-brand-terracotta text-white flex items-center justify-center text-3xl font-serif font-bold shadow-md">
+           JR
+         </div>
+         <div>
+           <h1 className="font-serif text-3xl font-bold">Jaheim's Studio</h1>
+           <p className="text-sm opacity-60 mt-1">Long-form essayist & visual journalist</p>
+         </div>
         </div>
 
-        <div className="flex space-x-8 text-center bg-white/60 backdrop-blur-sm px-6 py-3 rounded-2xl border border-brand-ink/5 shadow-sm">
-          <div>
-            <span className="font-serif text-2xl font-bold block text-brand-ink">10</span>
-            <span className="text-xs font-medium text-brand-ink/60 uppercase tracking-wider">Followers</span>
-          </div>
-          <div className="border-r border-brand-ink/10"></div>
-          <div>
-            <span className="font-serif text-2xl font-bold block text-brand-ink">10</span>
-            <span className="text-xs font-medium text-brand-ink/60 uppercase tracking-wider">Following</span>
-          </div>
-        </div>
-      </section>
+       <div className="flex space-x-8 text-center bg-white/60 dark:bg-white/10 backdrop-blur-sm px-6 py-3 rounded-2xl border border-current/10 shadow-sm">
+         <div>
+           <span className="font-serif text-2xl font-bold block">10</span>
+           <span className="text-xs font-medium opacity-60 uppercase tracking-wider">Followers</span>
+         </div>
+         <div className="border-r border-current/10"></div>
+         <div>
+           <span className="font-serif text-2xl font-bold block">10</span>
+           <span className="text-xs font-medium opacity-60 uppercase tracking-wider">Following</span>
+         </div>
+         </div>
+       </section>
 
       {/* Interactive Tile Grid */}
       <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
