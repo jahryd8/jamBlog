@@ -281,3 +281,47 @@ app.get('/api/users/:id/following', async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 });
+
+//Search Endpoints 
+
+// GET /api/search?q=query
+app.get('/api/search', async (req, res) => {
+  const query = req.query.q;
+
+  if (!query || query.trim() === '') {
+    return res.json({ posts: [], authors: [] });
+  }
+
+  const searchPattern = `%${query.trim()}%`;
+
+  try {
+    // 1. Search posts by title or excerpt
+    const postsQuery = `
+      SELECT p.post_id, p.title, p.excerpt, p.created_at, u.username, u.display_name
+      FROM posts p
+      JOIN users u ON p.user_id = u.user_id
+      WHERE p.is_private = false 
+        AND (p.title ILIKE $1 OR p.excerpt ILIKE $1)
+      ORDER BY p.created_at DESC
+      LIMIT 5;
+    `;
+    const postsResult = await pool.query(postsQuery, [searchPattern]);
+
+    // 2. Search authors by display_name or username
+    const authorsQuery = `
+      SELECT user_id, username, display_name, bio
+      FROM users
+      WHERE username ILIKE $1 OR display_name ILIKE $1
+      LIMIT 5;
+    `;
+    const authorsResult = await pool.query(authorsQuery, [searchPattern]);
+
+    res.json({
+      posts: postsResult.rows,
+      authors: authorsResult.rows,
+    });
+  } catch (err) {
+    console.error('Error executing search:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});

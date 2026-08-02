@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 import { PenSquare } from 'lucide-react';
+import SearchBar from './SearchBar';
 
 export default function Navbar() {
   const location = useLocation();
@@ -13,6 +14,10 @@ export default function Navbar() {
           JamBlog
         </span>
       </Link>
+
+      <div className="flex-1 max-w-md mx-6">
+        <SearchBar />
+      </div>
       
       <nav className="flex items-center space-x-6 text-xs md:text-sm font-semibold uppercase tracking-wider opacity-80">
         <Link 
