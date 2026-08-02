@@ -11,8 +11,12 @@
   },
   "dependencies": {
     "@types/html2canvas": "^0.5.35",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "html-to-image": "^1.11.13",
     "html2canvas": "^1.4.1",
+    "pg": "^8.22.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2"

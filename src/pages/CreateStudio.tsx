@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import html2canvas from 'html2canvas';
 import { useTheme } from '../context/ThemeContext';
 import { 
@@ -13,6 +14,8 @@ import {
 
 export default function CreateStudio() {
   const { theme } = useTheme();
+  const navigate = useNavigate();
+  const [isSubmitting, setIsSubmitting] = useState(false);
   
   // Editor State
   const [title, setTitle] = useState('The Psychology of Authentic Writing');
@@ -76,6 +79,45 @@ export default function CreateStudio() {
     const text = encodeURIComponent(`"${excerpt}" — from my latest essay "${title}" on JamBlog`);
     const url = encodeURIComponent(window.location.href);
     window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank');
+  };
+
+  // Publish Essay to Express / PostgreSQL API
+  const handlePublish = async () => {
+    if (!title.trim() || !content.trim()) {
+      alert('Please fill out both the title and content!');
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch('http://localhost:5000/api/posts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: 1, // Matches your inserted user_id in PostgreSQL
+          title,
+          content,
+          excerpt: excerpt || title,
+          is_private: isPrivate,
+        }),
+      });
+
+      if (response.ok) {
+        // Redirect user back to the feed to see their new post live
+        navigate('/');
+      } else {
+        const errorData = await response.json();
+        alert(`Failed to publish: ${errorData.message || 'Server error'}`);
+      }
+    } catch (err) {
+      console.error('Publish error:', err);
+      alert('Could not connect to the server. Is express running on port 5000?');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -151,9 +193,11 @@ export default function CreateStudio() {
             </button>
 
             <button 
-              className="bg-brand-terracotta hover:bg-brand-terracotta/90 text-white font-bold text-xs uppercase tracking-wider px-6 py-3 rounded-full shadow-md transition"
+               onClick={handlePublish}
+               disabled={isSubmitting}
+               className="bg-brand-terracotta hover:bg-brand-terracotta/90 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider px-6 py-3 rounded-full shadow-md transition"
             >
-              Publish Article
+              {isSubmitting ? 'Publishing...' : 'Publish Article'}
             </button>
           </div>
         </div>
