@@ -22,10 +22,10 @@ export default function Navbar() {
           Dashboard
         </Link>
         <Link 
-          to="/feed" 
-          className={`hover:text-brand-terracotta transition ${isActive('/feed') ? 'border-b-2 border-brand-terracotta pb-1 opacity-100' : ''}`}
+           to="/feed" 
+           className="hover:text-brand-terracotta transition font-medium text-sm"
         >
-          Feed
+            Feed
         </Link>
         <Link 
           to="/settings" 
