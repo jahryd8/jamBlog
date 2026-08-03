@@ -7,17 +7,46 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:5173', // Replace with my Vite frontend URL/port
+  credentials: true
+}));
 app.use(express.json());
 
-// --- REST API ENDPOINTS ---
-
-// API Health Check
+// --- HEALTH CHECK ---
 app.get('/', (req, res) => {
   res.json({ status: 'API is running successfully!' });
 });
 
-// 1. GET /api/posts - Fetch all public posts
+// --- ESSAYS & POSTS ENDPOINTS ---
+
+// 1. GET /api/posts/my-posts - MUST BE ABOVE /api/posts/:id
+app.get('/api/posts/my-posts', async (req, res) => {
+  const userId = 1; // Active user ID
+
+  try {
+    const query = `
+      SELECT 
+        p.post_id, 
+        p.title, 
+        p.excerpt, 
+        p.is_private, 
+        p.created_at,
+        (SELECT COUNT(*) FROM post_likes WHERE post_id = p.post_id) AS likes_count,
+        (SELECT COUNT(*) FROM comments WHERE post_id = p.post_id) AS comments_count
+      FROM posts p
+      WHERE p.user_id = $1
+      ORDER BY p.created_at DESC;
+    `;
+    const result = await pool.query(query, [userId]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching user posts:', err);
+    res.status(500).json({ message: 'Server error fetching user posts' });
+  }
+});
+
+// 2. GET /api/posts - Fetch all public posts
 app.get('/api/posts', async (req, res) => {
   try {
     const result = await pool.query(
@@ -34,60 +63,121 @@ app.get('/api/posts', async (req, res) => {
   }
 });
 
-// 2. GET /api/posts/:id - Get Single Post Details + Author Info + Likes/Saves
+// 3. GET /api/posts/:id - Single Post Details
 app.get('/api/posts/:id', async (req, res) => {
-  const postId = req.params.id;
-  const currentUserId = 1; // Temporary active user ID
+  const postId = parseInt(req.params.id, 10);
+  const currentUserId = 1;
+
+  if (isNaN(postId)) {
+    return res.status(400).json({ message: 'Invalid Post ID' });
+  }
 
   try {
-    const postQuery = `
+    const query = `
       SELECT 
-        p.post_id, p.title, p.content, p.excerpt, p.created_at, p.is_private,
-        u.user_id AS author_id, u.username, u.display_name, u.bio, u.avatar_url,
+        p.post_id, 
+        p.title, 
+        p.content, 
+        p.excerpt, 
+        p.created_at, 
+        p.is_private,
+        p.user_id AS author_id, 
+        COALESCE(u.username, 'Anonymous') AS username, 
+        COALESCE(u.display_name, 'Author') AS display_name, 
+        u.bio, 
+        u.avatar_url,
         (SELECT COUNT(*) FROM post_likes WHERE post_id = p.post_id) AS likes_count,
         (SELECT COUNT(*) FROM comments WHERE post_id = p.post_id) AS comments_count,
         EXISTS(SELECT 1 FROM post_likes WHERE post_id = p.post_id AND user_id = $1) AS is_liked,
-        EXISTS(SELECT 1 FROM saved_posts WHERE post_id = p.post_id AND user_id = $1) AS is_saved,
-        EXISTS(SELECT 1 FROM user_follows WHERE follower_id = $1 AND following_id = u.user_id) AS is_following_author
+        EXISTS(SELECT 1 FROM saved_posts WHERE post_id = p.post_id AND user_id = $1) AS is_bookmarked,
+        EXISTS(SELECT 1 FROM user_follows WHERE follower_id = $1 AND following_id = p.user_id) AS is_following_author
       FROM posts p
-      JOIN users u ON p.user_id = u.user_id
+      LEFT JOIN users u ON p.user_id = u.user_id
       WHERE p.post_id = $2;
     `;
-    const result = await pool.query(postQuery, [currentUserId, postId]);
+    const result = await pool.query(query, [currentUserId, postId]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Essay not found' });
+      return res.status(404).json({ message: 'Post not found in database' });
     }
 
     res.json(result.rows[0]);
   } catch (err) {
-    console.error('Error fetching post:', err);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Error fetching post by ID:', err);
+    res.status(500).json({ message: 'Server error while fetching post details' });
   }
 });
 
-// 3. POST /api/posts - Create a new post
+// 4. POST /api/posts - Create new essay
 app.post('/api/posts', async (req, res) => {
   try {
     const { user_id, title, content, excerpt, is_private } = req.body;
-    
+    const activeUserId = user_id ? user_id : 1;
+
     const newPost = await pool.query(
       `INSERT INTO posts (user_id, title, content, excerpt, is_private) 
        VALUES ($1, $2, $3, $4, $5) 
        RETURNING *`,
-      [user_id || 1, title, content, excerpt, is_private || false]
+      [activeUserId, title, content, excerpt || content?.slice(0, 150), is_private || false]
     );
 
     res.status(201).json(newPost.rows[0]);
   } catch (err) {
-    console.error(err.message);
+    console.error('Error creating post:', err.message);
     res.status(500).json({ error: 'Failed to create post' });
   }
 });
 
-// --- FEED SYSTEM ---
+// 5. PATCH /api/posts/:id/visibility - Toggle Public/Private
+app.patch('/api/posts/:id/visibility', async (req, res) => {
+  const postId = req.params.id;
+  const { is_private } = req.body;
+  const userId = 1;
 
-// GET /api/feed - Fetch feed posts with Likes & Saves state
+  try {
+    const result = await pool.query(
+      `UPDATE posts SET is_private = $1 WHERE post_id = $2 AND user_id = $3 RETURNING *`,
+      [is_private, postId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Post not found or unauthorized' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error toggling visibility:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// 6. DELETE /api/posts/:id - Delete Essay
+app.delete('/api/posts/:id', async (req, res) => {
+  const postId = req.params.id;
+  const userId = 1;
+
+  try {
+    await pool.query('DELETE FROM post_likes WHERE post_id = $1', [postId]);
+    await pool.query('DELETE FROM saved_posts WHERE post_id = $1', [postId]);
+    await pool.query('DELETE FROM comments WHERE post_id = $1', [postId]);
+
+    const result = await pool.query(
+      'DELETE FROM posts WHERE post_id = $1 AND user_id = $2 RETURNING *',
+      [postId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Post not found or unauthorized' });
+    }
+
+    res.json({ message: 'Post deleted successfully', deletedPostId: postId });
+  } catch (err) {
+    console.error('Error deleting post:', err);
+    res.status(500).json({ message: 'Server error while deleting essay' });
+  }
+});
+
+// --- FEED SYSTEM ---
 app.get('/api/feed', async (req, res) => {
   const currentUserId = 1;
   const filter = req.query.filter || 'all';
@@ -124,8 +214,6 @@ app.get('/api/feed', async (req, res) => {
 });
 
 // --- LIKES & SAVES ENDPOINTS ---
-
-// POST /api/posts/:id/like - Toggle Like
 app.post('/api/posts/:id/like', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const userId = 1;
@@ -138,10 +226,10 @@ app.post('/api/posts/:id/like', async (req, res) => {
 
     if (check.rows.length > 0) {
       await pool.query(`DELETE FROM post_likes WHERE user_id = $1 AND post_id = $2`, [userId, postId]);
-      res.json({ isLiked: false });
+      res.json({ liked: false });
     } else {
       await pool.query(`INSERT INTO post_likes (user_id, post_id) VALUES ($1, $2)`, [userId, postId]);
-      res.json({ isLiked: true });
+      res.json({ liked: true });
     }
   } catch (err) {
     console.error('Error toggling like:', err);
@@ -149,7 +237,6 @@ app.post('/api/posts/:id/like', async (req, res) => {
   }
 });
 
-// POST /api/posts/:id/save - Toggle Save/Bookmark
 app.post('/api/posts/:id/save', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const userId = 1;
@@ -162,10 +249,10 @@ app.post('/api/posts/:id/save', async (req, res) => {
 
     if (check.rows.length > 0) {
       await pool.query(`DELETE FROM saved_posts WHERE user_id = $1 AND post_id = $2`, [userId, postId]);
-      res.json({ isSaved: false });
+      res.json({ bookmarked: false });
     } else {
       await pool.query(`INSERT INTO saved_posts (user_id, post_id) VALUES ($1, $2)`, [userId, postId]);
-      res.json({ isSaved: true });
+      res.json({ bookmarked: true });
     }
   } catch (err) {
     console.error('Error toggling save:', err);
@@ -173,63 +260,184 @@ app.post('/api/posts/:id/save', async (req, res) => {
   }
 });
 
-// --- COMMENTS ENDPOINTS ---
-
-// GET /api/posts/:id/comments - Get Comments for an Essay
-app.get('/api/posts/:id/comments', async (req, res) => {
-  const postId = req.params.id;
+// POST /api/posts/:id/bookmark - Toggle Bookmark
+app.post('/api/posts/:id/bookmark', async (req, res) => {
+  const postId = parseInt(req.params.id, 10);
+  const currentUserId = 1;
 
   try {
-    const query = `
-      SELECT c.comment_id, c.content, c.created_at, u.username, u.display_name 
-      FROM comments c
-      JOIN users u ON c.user_id = u.user_id
-      WHERE c.post_id = $1
-      ORDER BY c.created_at DESC;
-    `;
-    const result = await pool.query(query, [postId]);
-    res.json(result.rows);
+    const checkRes = await pool.query(
+      `SELECT 1 FROM saved_posts WHERE user_id = $1 AND post_id = $2`,
+      [currentUserId, postId]
+    );
+
+    if (checkRes.rows.length > 0) {
+      await pool.query(
+        `DELETE FROM saved_posts WHERE user_id = $1 AND post_id = $2`,
+        [currentUserId, postId]
+      );
+      res.json({ is_bookmarked: false });
+    } else {
+      await pool.query(
+        `INSERT INTO saved_posts (user_id, post_id) VALUES ($1, $2)`,
+        [currentUserId, postId]
+      );
+      res.json({ is_bookmarked: true });
+    }
   } catch (err) {
-    console.error('Error fetching comments:', err);
-    res.status(500).json({ message: 'Server error fetching comments' });
+    console.error('Error toggling bookmark:', err);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
-// POST /api/posts/:id/comments - Add Comment
+// --- COMMENTS ENDPOINTS ---
+
+// GET /api/posts/:id/comments
+app.get('/api/posts/:id/comments', async (req, res) => {
+  const postId = parseInt(req.params.id, 10);
+  try {
+    const result = await pool.query(`
+      SELECT 
+        c.comment_id, c.post_id, c.user_id, c.content, 
+        c.parent_comment_id, c.created_at,
+        u.username, u.display_name, u.avatar_url
+      FROM comments c
+      LEFT JOIN users u ON c.user_id = u.user_id
+      WHERE c.post_id = $1
+      ORDER BY c.created_at ASC
+    `, [postId]);
+
+    res.json(result.rows);
+  } catch (err) {
+    console.error('Error fetching comments:', err.message);
+    res.status(500).json({ message: 'Failed to fetch comments', error: err.message });
+  }
+});
+
+// POST /api/posts/:id/comments - Add or Reply to Comment
 app.post('/api/posts/:id/comments', async (req, res) => {
-  const postId = req.params.id;
-  const { content } = req.body;
-  const userId = 1;
+  const postId = parseInt(req.params.id, 10);
+  const { content, parent_comment_id, parent_id } = req.body;
+  const currentUserId = 1; 
+
+  if (isNaN(postId)) {
+    return res.status(400).json({ message: 'Invalid Post ID parameter' });
+  }
 
   if (!content || !content.trim()) {
-    return res.status(400).json({ message: 'Comment cannot be empty' });
+    return res.status(400).json({ message: 'Comment content cannot be empty' });
+  }
+
+  // Parse incoming parent reference safely
+  const rawParent = parent_comment_id !== undefined ? parent_comment_id : parent_id;
+  const parentId = (rawParent && !isNaN(parseInt(rawParent, 10))) 
+    ? parseInt(rawParent, 10) 
+    : null;
+
+  try {
+    // Check if post exists
+    const postCheck = await pool.query('SELECT post_id FROM posts WHERE post_id = $1', [postId]);
+    if (postCheck.rows.length === 0) {
+      return res.status(404).json({ message: 'Target post does not exist' });
+    }
+
+    // Insert new comment
+    const commentRes = await pool.query(`
+      INSERT INTO comments (post_id, user_id, content, parent_comment_id)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *
+    `, [postId, currentUserId, content.trim(), parentId]);
+
+    const newComment = commentRes.rows[0];
+
+    // Optional notification insertion
+    if (parentId) {
+      try {
+        const parentRes = await pool.query(
+          `SELECT user_id FROM comments WHERE comment_id = $1`, 
+          [parentId]
+        );
+
+        if (parentRes.rows.length > 0 && parentRes.rows[0].user_id) {
+          const parentAuthorId = parentRes.rows[0].user_id;
+
+          if (parentAuthorId !== currentUserId) {
+            await pool.query(`
+              INSERT INTO notifications (user_id, actor_id, post_id, type)
+              VALUES ($1, $2, $3, 'comment_reply')
+            `, [parentAuthorId, currentUserId, postId]);
+          }
+        }
+      } catch (notifErr) {
+        console.error('Non-critical notification insertion error:', notifErr.message);
+      }
+    }
+
+    // Join with user table for avatar/username rendering
+    const fullComment = await pool.query(`
+      SELECT 
+        c.comment_id, c.post_id, c.user_id, c.content, 
+        c.parent_comment_id, c.created_at,
+        u.username, u.display_name, u.avatar_url
+      FROM comments c
+      LEFT JOIN users u ON c.user_id = u.user_id
+      WHERE c.comment_id = $1
+    `, [newComment.comment_id]);
+
+    return res.status(201).json(fullComment.rows[0] || newComment);
+
+  } catch (err) {
+    console.error('--- DETAILED COMMENT ERROR ---', err);
+    return res.status(500).json({ 
+      message: 'Failed to submit comment', 
+      error: err.message
+    });
+  }
+});
+
+// PATCH /api/comments/:commentId - Edit Comment
+app.patch('/api/comments/:commentId', async (req, res) => {
+  const commentId = parseInt(req.params.commentId, 10);
+  const { content } = req.body;
+
+  if (isNaN(commentId)) {
+    return res.status(400).json({ message: 'Invalid comment ID' });
   }
 
   try {
-    const insertQuery = `
-      INSERT INTO comments (post_id, user_id, content) 
-      VALUES ($1, $2, $3) 
-      RETURNING comment_id, content, created_at;
-    `;
-    const newComment = await pool.query(insertQuery, [postId, userId, content.trim()]);
-    
-    const userQuery = 'SELECT username, display_name FROM users WHERE user_id = $1';
-    const userResult = await pool.query(userQuery, [userId]);
+    const result = await pool.query(`
+      UPDATE comments 
+      SET content = $1
+      WHERE comment_id = $2
+      RETURNING *
+    `, [content, commentId]);
 
-    res.json({
-      ...newComment.rows[0],
-      username: userResult.rows[0].username,
-      display_name: userResult.rows[0].display_name,
-    });
+    res.json(result.rows[0]);
   } catch (err) {
-    console.error('Error creating comment:', err);
-    res.status(500).json({ message: 'Server error' });
+    console.error('Error updating comment:', err);
+    res.status(500).json({ message: 'Failed to update comment' });
+  }
+});
+
+// DELETE /api/comments/:comment_id - Delete Comment
+app.delete('/api/comments/:comment_id', async (req, res) => {
+  const commentId = parseInt(req.params.comment_id, 10);
+
+  if (isNaN(commentId)) {
+    return res.status(400).json({ message: 'Invalid comment ID' });
+  }
+
+  try {
+    await pool.query('DELETE FROM comments WHERE comment_id = $1', [commentId]);
+    res.status(200).json({ message: 'Comment deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting comment:', err);
+    res.status(500).json({ error: 'Failed to delete comment' });
   }
 });
 
 // --- USER & FOLLOW SYSTEM ---
 
-// GET /api/users/:username - Author Profile
 app.get('/api/users/:username', async (req, res) => {
   const { username } = req.params;
   const currentUserId = 1;
@@ -273,7 +481,6 @@ app.get('/api/users/:username', async (req, res) => {
   }
 });
 
-// POST /api/users/:id/follow - Follow/Unfollow
 app.post('/api/users/:id/follow', async (req, res) => {
   const targetUserId = parseInt(req.params.id, 10);
   const followerId = 1;
@@ -305,7 +512,6 @@ app.post('/api/users/:id/follow', async (req, res) => {
   }
 });
 
-// GET /api/users/:id/following - List following
 app.get('/api/users/:id/following', async (req, res) => {
   const userId = req.params.id;
 
@@ -327,7 +533,6 @@ app.get('/api/users/:id/following', async (req, res) => {
 });
 
 // --- SEARCH ---
-
 app.get('/api/search', async (req, res) => {
   const query = req.query.q;
 
@@ -368,128 +573,47 @@ app.get('/api/search', async (req, res) => {
 });
 
 // --- DASHBOARD STATS ---
-
-// GET /api/dashboard/stats - Clean, non-duplicate query returning received likes, saved posts, and liked posts (likes given)
 app.get('/api/dashboard/stats', async (req, res) => {
-  const userId = 1;
+  const currentUserId = 1;
 
   try {
-    // 1. Likes received on user's posts
-    const likesReceived = await pool.query(
-      `SELECT COUNT(*) FROM post_likes pl JOIN posts p ON pl.post_id = p.post_id WHERE p.user_id = $1`,
-      [userId]
+    // Likes received on user's own posts
+    const receivedRes = await pool.query(
+      `SELECT COUNT(*) FROM post_likes pl 
+       JOIN posts p ON pl.post_id = p.post_id 
+       WHERE p.user_id = $1`,
+      [currentUserId]
     );
 
-    // 2. Saved/Bookmarked posts
-    const savedPosts = await pool.query(
-      `SELECT p.post_id, p.title, p.excerpt, p.created_at, u.username, u.display_name 
+    // Likes given by this user
+    const givenRes = await pool.query(
+      `SELECT COUNT(*) FROM post_likes WHERE user_id = $1`,
+      [currentUserId]
+    );
+
+    // Saved bookmarks
+    const savedRes = await pool.query(
+      `SELECT p.post_id, p.title, p.excerpt, sp.created_at, u.username, u.display_name
        FROM saved_posts sp
        JOIN posts p ON sp.post_id = p.post_id
        JOIN users u ON p.user_id = u.user_id
        WHERE sp.user_id = $1
-       ORDER BY p.created_at DESC`,
-      [userId]
-    );
-
-    // 3. Posts liked by current user (Likes Given)
-    const likedPosts = await pool.query(
-      `SELECT p.post_id, p.title, p.excerpt, p.created_at, u.username, u.display_name 
-       FROM post_likes pl
-       JOIN posts p ON pl.post_id = p.post_id
-       JOIN users u ON p.user_id = u.user_id
-       WHERE pl.user_id = $1
-       ORDER BY p.created_at DESC`,
-      [userId]
+       ORDER BY sp.created_at DESC`,
+      [currentUserId]
     );
 
     res.json({
-      totalLikesReceived: parseInt(likesReceived.rows[0].count, 10) || 0,
-      savedPosts: savedPosts.rows,
-      likedPosts: likedPosts.rows,
+      totalLikesReceived: parseInt(receivedRes.rows[0].count, 10) || 0,
+      totalLikesGiven: parseInt(givenRes.rows[0].count, 10) || 0,
+      savedPosts: savedRes.rows
     });
   } catch (err) {
     console.error('Error fetching dashboard stats:', err);
-    res.status(500).json({ message: 'Server error fetching dashboard stats' });
+    res.status(500).json({ message: 'Server error fetching stats' });
   }
 });
 
-// Start Express Server
+// START SERVER
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-});
-
-// --- MY POSTS ENDPOINT ---
-
-// GET /api/posts/my-posts - Fetch essays authored by active user
-app.get('/api/posts/my-posts', async (req, res) => {
-  const userId = 1; // Temporary active user ID
-
-  try {
-    const query = `
-      SELECT 
-        p.post_id, p.title, p.excerpt, p.is_private, p.created_at,
-        (SELECT COUNT(*) FROM post_likes WHERE post_id = p.post_id) AS likes_count,
-        (SELECT COUNT(*) FROM comments WHERE post_id = p.post_id) AS comments_count
-      FROM posts p
-      WHERE p.user_id = $1
-      ORDER BY p.created_at DESC;
-    `;
-    const result = await pool.query(query, [userId]);
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching user posts:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// --- VISIBILITY & DELETE ENDPOINTS ---
-
-// PATCH /api/posts/:id/visibility - Toggle Post Public/Private Status
-app.patch('/api/posts/:id/visibility', async (req, res) => {
-  const postId = req.params.id;
-  const { is_private } = req.body;
-  const userId = 1;
-
-  try {
-    const result = await pool.query(
-      `UPDATE posts SET is_private = $1 WHERE post_id = $2 AND user_id = $3 RETURNING *`,
-      [is_private, postId, userId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Post not found or unauthorized' });
-    }
-
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('Error toggling visibility:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// DELETE /api/posts/:id - Delete Essay
-app.delete('/api/posts/:id', async (req, res) => {
-  const postId = req.params.id;
-  const userId = 1;
-
-  try {
-    // Delete dependent relationships first (likes, comments, saved_posts) if foreign keys lack ON DELETE CASCADE
-    await pool.query(`DELETE FROM post_likes WHERE post_id = $1`, [postId]);
-    await pool.query(`DELETE FROM saved_posts WHERE post_id = $1`, [postId]);
-    await pool.query(`DELETE FROM comments WHERE post_id = $1`, [postId]);
-
-    const result = await pool.query(
-      `DELETE FROM posts WHERE post_id = $1 AND user_id = $2 RETURNING *`,
-      [postId, userId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Post not found or unauthorized' });
-    }
-
-    res.json({ message: 'Post deleted successfully' });
-  } catch (err) {
-    console.error('Error deleting post:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
 });

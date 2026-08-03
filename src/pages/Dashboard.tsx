@@ -11,7 +11,8 @@ import {
   EyeOff, 
   Compass, 
   MessageSquare,
-  Edit3
+  Edit3,
+  X
 } from 'lucide-react';
 
 interface MyPost {
@@ -33,25 +34,20 @@ interface SavedPost {
   display_name: string;
 }
 
-interface LikedPost {
-  post_id: number;
-  title: string;
-  excerpt: string;
-  created_at: string;
-  username: string;
-  display_name: string;
-}
-
 export default function Dashboard() {
   const { theme } = useTheme();
 
   // State
   const [myPosts, setMyPosts] = useState<MyPost[]>([]);
   const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
-  const [likedPosts, setLikedPosts] = useState<LikedPost[]>([]);
-  const [totalLikesReceived, setTotalLikesReceived] = useState<number>(0);
+  const [totalLikes, setTotalLikes] = useState<number>(0);
+  const [totalLikesGiven, setTotalLikesGiven] = useState<number>(0);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'my-posts' | 'bookmarks' | 'liked-posts'>('my-posts');
+  const [activeTab, setActiveTab] = useState<'my-posts' | 'bookmarks'>('my-posts');
+
+  // Track which post ID is currently confirming deletion
+  const [deletingPostId, setDeletingPostId] = useState<number | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     fetchDashboardData();
@@ -65,13 +61,12 @@ export default function Dashboard() {
       const postsData = await postsRes.json();
       if (Array.isArray(postsData)) setMyPosts(postsData);
 
-      // 2. Fetch Dashboard Stats (Likes Received, Saved Bookmarks, & Liked Posts)
+      // 2. Fetch Dashboard Stats
       const statsRes = await fetch('http://localhost:5000/api/dashboard/stats');
       const statsData = await statsRes.json();
-      
-      setTotalLikesReceived(statsData.totalLikesReceived || 0);
+      setTotalLikes(statsData.totalLikesReceived || 0);
+      setTotalLikesGiven(statsData.totalLikesGiven || 0);
       setSavedPosts(statsData.savedPosts || []);
-      setLikedPosts(statsData.likedPosts || []);
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
     } finally {
@@ -99,19 +94,21 @@ export default function Dashboard() {
     }
   };
 
-  // Delete Post
-  const handleDeletePost = async (postId: number) => {
-    if (!window.confirm('Are you sure you want to delete this essay?')) return;
-
+  // Inline Delete Post (NO window.confirm)
+  const confirmDeletePost = async (postId: number) => {
+    setIsDeleting(true);
     try {
       const res = await fetch(`http://localhost:5000/api/posts/${postId}`, {
         method: 'DELETE',
       });
       if (res.ok) {
         setMyPosts((prev) => prev.filter((post) => post.post_id !== postId));
+        setDeletingPostId(null);
       }
     } catch (err) {
       console.error('Failed to delete post:', err);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -123,7 +120,7 @@ export default function Dashboard() {
           <h1 className={`font-serif text-3xl sm:text-4xl font-bold ${theme === 'dark' ? 'text-white' : 'text-brand-ink'}`}>
             Author Dashboard
           </h1>
-          <p className="text-xs opacity-60 mt-1">Manage your published essays, view engagement, and browse saved posts.</p>
+          <p className="text-xs opacity-60 mt-1">Manage your published essays, view engagement, and browse bookmarks.</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -149,12 +146,10 @@ export default function Dashboard() {
 
       {/* Overview Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        {/* Published Essays Stat */}
+        {/* 1. My Essays */}
         <div
           onClick={() => setActiveTab('my-posts')}
           className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition hover:border-brand-terracotta/50 ${
-            activeTab === 'my-posts' ? 'ring-2 ring-brand-terracotta' : ''
-          } ${
             theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
           }`}
         >
@@ -167,7 +162,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Total Likes Received Stat */}
+        {/* 2. Likes Received */}
         <div
           className={`p-5 rounded-3xl border flex items-center gap-4 transition ${
             theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
@@ -177,35 +172,30 @@ export default function Dashboard() {
             <Heart className="w-5 h-5 fill-current" />
           </div>
           <div>
-            <div className="text-2xl font-bold font-serif">{loading ? '...' : totalLikesReceived}</div>
+            <div className="text-2xl font-bold font-serif">{loading ? '...' : totalLikes}</div>
             <div className="text-xs opacity-60 font-medium">Likes Received</div>
           </div>
         </div>
 
-        {/* Likes Given Stat */}
+        {/* 3. Likes Given */}
         <div
-          onClick={() => setActiveTab('liked-posts')}
-          className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition hover:border-rose-500/50 ${
-            activeTab === 'liked-posts' ? 'ring-2 ring-rose-500' : ''
-          } ${
+          className={`p-5 rounded-3xl border flex items-center gap-4 transition ${
             theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
           }`}
         >
-          <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-500">
+          <div className="p-3 rounded-2xl bg-sky-500/10 text-sky-500">
             <Heart className="w-5 h-5" />
           </div>
           <div>
-            <div className="text-2xl font-bold font-serif">{loading ? '...' : likedPosts.length}</div>
+            <div className="text-2xl font-bold font-serif">{loading ? '...' : totalLikesGiven}</div>
             <div className="text-xs opacity-60 font-medium">Likes Given</div>
           </div>
         </div>
 
-        {/* Saved Bookmarks Stat */}
+        {/* 4. Bookmarks */}
         <div
           onClick={() => setActiveTab('bookmarks')}
           className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition hover:border-amber-500/50 ${
-            activeTab === 'bookmarks' ? 'ring-2 ring-amber-500' : ''
-          } ${
             theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
           }`}
         >
@@ -214,7 +204,7 @@ export default function Dashboard() {
           </div>
           <div>
             <div className="text-2xl font-bold font-serif">{loading ? '...' : savedPosts.length}</div>
-            <div className="text-xs opacity-60 font-medium">Bookmarks</div>
+            <div className="text-xs opacity-60 font-medium">Saved Bookmarks</div>
           </div>
         </div>
       </div>
@@ -232,20 +222,6 @@ export default function Dashboard() {
           <span>My Essays</span>
           <span className="px-2 py-0.5 text-[10px] rounded-full bg-current/10 font-mono">
             {myPosts.length}
-          </span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('liked-posts')}
-          className={`pb-3 transition relative flex items-center gap-2 ${
-            activeTab === 'liked-posts'
-              ? 'text-brand-terracotta border-b-2 border-brand-terracotta'
-              : 'opacity-60 hover:opacity-100'
-          }`}
-        >
-          <span>Liked Essays</span>
-          <span className="px-2 py-0.5 text-[10px] rounded-full bg-current/10 font-mono">
-            {likedPosts.length}
           </span>
         </button>
 
@@ -324,34 +300,59 @@ export default function Dashboard() {
                     </div>
                   </div>
 
+                  {/* Actions Bar / Inline Delete Confirmation */}
                   <div className="flex items-center gap-2 pt-2 sm:pt-0 border-t sm:border-0 border-current/10">
-                    <button
-                      onClick={() => handleTogglePrivate(post.post_id, post.is_private)}
-                      title={post.is_private ? 'Make Public' : 'Make Private'}
-                      className={`p-2 rounded-xl border text-xs transition ${
-                        theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
-                      }`}
-                    >
-                      {post.is_private ? <Eye className="w-4 h-4 text-emerald-500" /> : <EyeOff className="w-4 h-4 text-amber-500" />}
-                    </button>
+                    {deletingPostId === post.post_id ? (
+                      /* INLINE CONFIRMATION UI */
+                      <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 p-1.5 rounded-2xl animate-fade-in">
+                        <span className="text-[11px] font-semibold text-rose-500 px-2">Delete?</span>
+                        <button
+                          disabled={isDeleting}
+                          onClick={() => confirmDeletePost(post.post_id)}
+                          className="px-3 py-1 bg-rose-500 text-white rounded-xl text-xs font-bold hover:bg-rose-600 transition disabled:opacity-50"
+                        >
+                          {isDeleting ? 'Deleting...' : 'Confirm'}
+                        </button>
+                        <button
+                          onClick={() => setDeletingPostId(null)}
+                          className="p-1 rounded-xl text-xs hover:bg-current/10 transition"
+                          title="Cancel"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      /* STANDARD BUTTONS */
+                      <>
+                        <button
+                          onClick={() => handleTogglePrivate(post.post_id, post.is_private)}
+                          title={post.is_private ? 'Make Public' : 'Make Private'}
+                          className={`p-2 rounded-xl border text-xs transition ${
+                            theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
+                          }`}
+                        >
+                          {post.is_private ? <Eye className="w-4 h-4 text-emerald-500" /> : <EyeOff className="w-4 h-4 text-amber-500" />}
+                        </button>
 
-                    <Link
-                      to={`/edit/${post.post_id}`}
-                      title="Edit Essay"
-                      className={`p-2 rounded-xl border text-xs transition ${
-                        theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
-                      }`}
-                    >
-                      <Edit3 className="w-4 h-4" />
-                    </Link>
+                        <Link
+                          to={`/edit/${post.post_id}`}
+                          title="Edit Essay"
+                          className={`p-2 rounded-xl border text-xs transition ${
+                            theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
+                          }`}
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </Link>
 
-                    <button
-                      onClick={() => handleDeletePost(post.post_id)}
-                      title="Delete Essay"
-                      className="p-2 rounded-xl border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition text-xs"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                        <button
+                          onClick={() => setDeletingPostId(post.post_id)}
+                          title="Delete Essay"
+                          className="p-2 rounded-xl border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition text-xs"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 </article>
               ))}
@@ -360,53 +361,7 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* Tab 2: Liked Essays Section */}
-      {activeTab === 'liked-posts' && (
-        <section className="space-y-4">
-          {likedPosts.length === 0 ? (
-            <div
-              className={`p-10 text-center rounded-3xl border ${
-                theme === 'dark' ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-black/10'
-              }`}
-            >
-              <Heart className="w-8 h-8 mx-auto opacity-40 text-rose-500 mb-2" />
-              <p className="text-xs opacity-60">You haven't liked any essays yet.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {likedPosts.map((post) => (
-                <article
-                  key={post.post_id}
-                  className={`p-6 rounded-3xl border transition shadow-sm space-y-3 ${
-                    theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
-                  }`}
-                >
-                  <div className="text-[11px] opacity-60">
-                    By{' '}
-                    <Link to={`/author/${post.username}`} className="hover:text-brand-terracotta font-semibold">
-                      {post.display_name || post.username}
-                    </Link>
-                  </div>
-
-                  <h3 className="font-serif text-lg font-bold">
-                    <Link to={`/post/${post.post_id}`} className="hover:text-brand-terracotta transition">
-                      {post.title}
-                    </Link>
-                  </h3>
-
-                  <p className="text-xs opacity-80 line-clamp-2 leading-relaxed">{post.excerpt}</p>
-
-                  <div className="pt-3 border-t border-current/10 text-[10px] opacity-50">
-                    Published on {new Date(post.created_at).toLocaleDateString()}
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Tab 3: Saved Reading List Section */}
+      {/* Tab 2: Saved Reading List Section */}
       {activeTab === 'bookmarks' && (
         <section className="space-y-4">
           {savedPosts.length === 0 ? (
@@ -416,7 +371,7 @@ export default function Dashboard() {
               }`}
             >
               <Bookmark className="w-8 h-8 mx-auto opacity-40 text-amber-500 mb-2" />
-              <p className="text-xs opacity-60">You haven't saved any essays yet!</p>
+              <p className="text-xs opacity-60">You haven't saved any essays yet! Bookmark posts from the feed to read them later.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
