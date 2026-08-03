@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useRef, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import html2canvas from 'html2canvas';
 import { useTheme } from '../context/ThemeContext';
 import { 
@@ -9,22 +9,24 @@ import {
   Globe, 
   Palette,
   Share2,
-  MessageSquare
+  MessageSquare,
+  Save,
+  ArrowLeft
 } from 'lucide-react';
 
 export default function CreateStudio() {
   const { theme } = useTheme();
   const navigate = useNavigate();
+  const { id } = useParams<{ id?: string }>(); // Detect if editing an existing essay
+  const isEditMode = Boolean(id);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingPost, setIsLoadingPost] = useState(false);
   
   // Editor State
-  const [title, setTitle] = useState('The Psychology of Authentic Writing');
-  const [content, setContent] = useState(
-    'In an era dominated by 15-second clips and algorithmic feeds, deep writing gives us the space to process nuanced thoughts. Providing a brand or person with specific character traits makes it more human. A clearly defined personality generates deep attachment among its audience.'
-  );
-  const [excerpt, setExcerpt] = useState(
-    'In an era dominated by 15-second clips, deep writing gives us the space to process nuanced thoughts.'
-  );
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [excerpt, setExcerpt] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
 
   // Poster Customization State
@@ -33,6 +35,42 @@ export default function CreateStudio() {
 
   // Ref for Poster Element (for HTML2Canvas export)
   const posterRef = useRef<HTMLDivElement>(null);
+
+  // 1. Fetch Post Data if in Edit Mode
+  useEffect(() => {
+    if (!id) {
+      // Defaults for brand new posts
+      setTitle('The Psychology of Authentic Writing');
+      setContent(
+        'In an era dominated by 15-second clips and algorithmic feeds, deep writing gives us the space to process nuanced thoughts. Providing a brand or person with specific character traits makes it more human. A clearly defined personality generates deep attachment among its audience.'
+      );
+      setExcerpt('In an era dominated by 15-second clips, deep writing gives us the space to process nuanced thoughts.');
+      return;
+    }
+
+    const fetchPostToEdit = async () => {
+      setIsLoadingPost(true);
+      try {
+        const response = await fetch(`http://localhost:5000/api/posts/${id}`);
+        if (response.ok) {
+          const postData = await response.json();
+          setTitle(postData.title || '');
+          setContent(postData.content || '');
+          setExcerpt(postData.excerpt || '');
+          setIsPrivate(postData.is_private ?? false);
+        } else {
+          alert('Could not fetch essay data for editing.');
+          navigate('/dashboard');
+        }
+      } catch (err) {
+        console.error('Error fetching essay to edit:', err);
+      } finally {
+        setIsLoadingPost(false);
+      }
+    };
+
+    fetchPostToEdit();
+  }, [id, navigate]);
 
   // Export Poster as PNG
   const handleExportPoster = async () => {
@@ -81,8 +119,8 @@ export default function CreateStudio() {
     window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank');
   };
 
-  // Publish Essay to Express / PostgreSQL API
-  const handlePublish = async () => {
+  // 2. Publish or Update Essay (Handles POST and PUT)
+  const handlePublishOrUpdate = async () => {
     if (!title.trim() || !content.trim()) {
       alert('Please fill out both the title and content!');
       return;
@@ -90,14 +128,20 @@ export default function CreateStudio() {
 
     setIsSubmitting(true);
 
+    const endpoint = isEditMode
+      ? `http://localhost:5000/api/posts/${id}`
+      : 'http://localhost:5000/api/posts';
+
+    const method = isEditMode ? 'PUT' : 'POST';
+
     try {
-      const response = await fetch('http://localhost:5000/api/posts', {
-        method: 'POST',
+      const response = await fetch(endpoint, {
+        method,
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          user_id: 1, // Matches your inserted user_id in PostgreSQL
+          user_id: 1, // Matches inserted user_id in PostgreSQL
           title,
           content,
           excerpt: excerpt || title,
@@ -106,30 +150,61 @@ export default function CreateStudio() {
       });
 
       if (response.ok) {
-        // Redirect user back to the feed to see their new post live
-        navigate('/');
+         // Send the user to the dashboard with the appropriate toast message
+         navigate('/dashboard', {
+           state: {
+             message: isEditMode
+               ? 'Essay updated successfully!'
+               : 'Essay published successfully!',
+          },
+         });
       } else {
-        const errorData = await response.json();
-        alert(`Failed to publish: ${errorData.message || 'Server error'}`);
+          const errorData = await response.json();
+          alert(`Failed to save: ${errorData.message || 'Server error'}`);
       }
     } catch (err) {
-      console.error('Publish error:', err);
+      console.error('Save error:', err);
       alert('Could not connect to the server. Is express running on port 5000?');
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  if (isLoadingPost) {
+    return (
+      <div className="max-w-6xl mx-auto px-4 py-16 text-center">
+        <p className="font-serif text-sm opacity-60">Loading essay details...</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8">
+    <div className="max-w-6xl mx-auto px-4 py-8 space-y-8">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className={`font-serif text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-brand-ink'}`}>
-          Author Studio
-        </h1>
-        <p className={`text-sm mt-1 ${theme === 'dark' ? 'text-gray-400' : 'text-brand-ink/70'}`}>
-          Craft long-form essays & generate visual social media posters.
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className={`font-serif text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-brand-ink'}`}>
+            {isEditMode ? 'Edit Essay' : 'Author Studio'}
+          </h1>
+          <p className={`text-sm mt-1 ${theme === 'dark' ? 'text-gray-400' : 'text-brand-ink/70'}`}>
+            {isEditMode
+              ? 'Update your published essay or modify its excerpt and visual poster.'
+              : 'Craft long-form essays & generate visual social media posters.'}
+          </p>
+        </div>
+
+        {isEditMode && (
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard', { state: { message: 'Cancelled update.' } })}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition ${
+            theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
+            }`}
+          >
+           <ArrowLeft className="w-3.5 h-3.5" />
+           <span>Cancel Edit</span>
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -163,7 +238,7 @@ export default function CreateStudio() {
             />
           </div>
 
-          {/* Featured Excerpt Input (Feeds into Poster) */}
+          {/* Featured Excerpt Input */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-brand-terracotta mb-2 flex items-center gap-1.5 font-bold">
               <Sparkles className="w-3.5 h-3.5" />
@@ -178,9 +253,10 @@ export default function CreateStudio() {
             />
           </div>
 
-          {/* Controls: Visibility Toggle & Publish Button */}
+          {/* Controls: Visibility Toggle & Save/Publish Button */}
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-black/10">
             <button
+              type="button"
               onClick={() => setIsPrivate(!isPrivate)}
               className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition ${
                 isPrivate 
@@ -193,11 +269,21 @@ export default function CreateStudio() {
             </button>
 
             <button 
-               onClick={handlePublish}
-               disabled={isSubmitting}
-               className="bg-brand-terracotta hover:bg-brand-terracotta/90 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider px-6 py-3 rounded-full shadow-md transition"
+              type="button"
+              onClick={handlePublishOrUpdate}
+              disabled={isSubmitting}
+              className="flex items-center gap-2 bg-brand-terracotta hover:bg-brand-terracotta/90 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider px-6 py-3 rounded-full shadow-md transition"
             >
-              {isSubmitting ? 'Publishing...' : 'Publish Article'}
+              <Save className="w-4 h-4" />
+              <span>
+                {isSubmitting
+                  ? isEditMode
+                    ? 'Saving...'
+                    : 'Publishing...'
+                  : isEditMode
+                  ? 'Update Essay'
+                  : 'Publish Article'}
+              </span>
             </button>
           </div>
         </div>
@@ -216,6 +302,7 @@ export default function CreateStudio() {
               {(['minimal', 'bold', 'editorial'] as const).map((style) => (
                 <button
                   key={style}
+                  type="button"
                   onClick={() => setPosterStyle(style)}
                   className={`py-2 text-xs font-semibold rounded-xl capitalize transition ${
                     posterStyle === style 
@@ -269,6 +356,7 @@ export default function CreateStudio() {
             theme === 'dark' ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-brand-ink/10'
           }`}>
             <button
+              type="button"
               onClick={handleExportPoster}
               disabled={isGenerating}
               className="w-full flex items-center justify-center gap-2 bg-brand-ink text-brand-cream hover:bg-brand-terracotta py-3 px-4 rounded-2xl text-xs font-bold uppercase tracking-wider shadow transition disabled:opacity-50"
@@ -285,6 +373,7 @@ export default function CreateStudio() {
               
               <div className="grid grid-cols-2 gap-3">
                 <button 
+                  type="button"
                   onClick={handleNativeShare}
                   disabled={isGenerating}
                   className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-2xl text-xs font-semibold border transition ${
@@ -299,6 +388,7 @@ export default function CreateStudio() {
                 </button>
 
                 <button 
+                  type="button"
                   onClick={handleShareToX}
                   className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-2xl text-xs font-semibold border transition ${
                     theme === 'dark'

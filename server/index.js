@@ -177,6 +177,47 @@ app.delete('/api/posts/:id', async (req, res) => {
   }
 });
 
+// PUT /api/posts/:id - Edit / Update Essay
+app.put('/api/posts/:id', async (req, res) => {
+  const postId = parseInt(req.params.id, 10);
+  const { title, content, excerpt, is_private } = req.body;
+  const userId = 1; // Active user ID
+
+  if (isNaN(postId)) {
+    return res.status(400).json({ message: 'Invalid Post ID' });
+  }
+
+  if (!title || !title.trim() || !content || !content.trim()) {
+    return res.status(400).json({ message: 'Title and content cannot be empty' });
+  }
+
+  try {
+    // Generate new excerpt if not provided
+    const updatedExcerpt = excerpt || content.slice(0, 150);
+
+    const result = await pool.query(`
+      UPDATE posts 
+      SET 
+        title = $1, 
+        content = $2, 
+        excerpt = $3, 
+        is_private = COALESCE($4, is_private),
+        updated_at = CURRENT_TIMESTAMP
+      WHERE post_id = $5 AND user_id = $6
+      RETURNING *
+    `, [title.trim(), content.trim(), updatedExcerpt, is_private, postId, userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Post not found or unauthorized' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating post:', err.message);
+    res.status(500).json({ message: 'Failed to update post', error: err.message });
+  }
+});
+
 // --- FEED SYSTEM ---
 app.get('/api/feed', async (req, res) => {
   const currentUserId = 1;
@@ -616,4 +657,4 @@ app.get('/api/dashboard/stats', async (req, res) => {
 // START SERVER
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-});
+}); 

@@ -17,10 +17,12 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/post/:id" element={<PostView />} />
           <Route path="/create" element={<CreateStudio />} />
+          <Route path="/edit/:id" element={<CreateStudio />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/feed" element={<Feed />} />
           <Route path="/author/:username" element={<AuthorProfile />} />
           <Route path="/post/:id" element={<PostDetail />} />
+          <Route path="*" element={<Dashboard />} />
         </Routes>
       </main>
     </>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { 
   Heart, 
@@ -12,7 +12,9 @@ import {
   Compass, 
   MessageSquare,
   Edit3,
-  X
+  X,
+  CheckCircle2,
+  Info
 } from 'lucide-react';
 
 interface MyPost {
@@ -36,6 +38,12 @@ interface SavedPost {
 
 export default function Dashboard() {
   const { theme } = useTheme();
+  const location = useLocation();
+
+  // Toast / Feedback banner state passed via react-router-dom
+  const [toastMessage, setToastMessage] = useState<string | null>(
+    location.state?.message || null
+  );
 
   // State
   const [myPosts, setMyPosts] = useState<MyPost[]>([]);
@@ -52,6 +60,14 @@ export default function Dashboard() {
   useEffect(() => {
     fetchDashboardData();
   }, []);
+
+  // Auto-dismiss feedback message after 4 seconds
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   const fetchDashboardData = async () => {
     setLoading(true);
@@ -94,7 +110,7 @@ export default function Dashboard() {
     }
   };
 
-  // Inline Delete Post (NO window.confirm)
+  // Inline Delete Post
   const confirmDeletePost = async (postId: number) => {
     setIsDeleting(true);
     try {
@@ -104,6 +120,7 @@ export default function Dashboard() {
       if (res.ok) {
         setMyPosts((prev) => prev.filter((post) => post.post_id !== postId));
         setDeletingPostId(null);
+        setToastMessage('Essay deleted successfully.');
       }
     } catch (err) {
       console.error('Failed to delete post:', err);
@@ -114,6 +131,30 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-8">
+      {/* Toast Feedback Notification Banner */}
+      {toastMessage && (
+        <div className={`p-4 rounded-2xl text-xs font-bold flex items-center justify-between border transition-all animate-fade-in ${
+          toastMessage.toLowerCase().includes('cancel')
+            ? 'bg-amber-500/10 text-amber-600 border-amber-500/20'
+            : 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+        }`}>
+          <div className="flex items-center gap-2">
+            {toastMessage.toLowerCase().includes('cancel') ? (
+              <Info className="w-4 h-4" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4" />
+            )}
+            <span>{toastMessage}</span>
+          </div>
+          <button 
+            onClick={() => setToastMessage(null)}
+            className="p-1 rounded-lg hover:bg-current/10 transition"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
