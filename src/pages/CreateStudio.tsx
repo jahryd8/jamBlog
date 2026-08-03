@@ -11,7 +11,9 @@ import {
   Share2,
   MessageSquare,
   Save,
-  ArrowLeft
+  ArrowLeft,
+  FileText,
+  Send
 } from 'lucide-react';
 
 export default function CreateStudio() {
@@ -28,6 +30,7 @@ export default function CreateStudio() {
   const [content, setContent] = useState('');
   const [excerpt, setExcerpt] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
+  const [isDraft, setIsDraft] = useState(false); // Draft state tracking
 
   // Poster Customization State
   const [posterStyle, setPosterStyle] = useState<'minimal' | 'bold' | 'editorial'>('minimal');
@@ -45,6 +48,8 @@ export default function CreateStudio() {
         'In an era dominated by 15-second clips and algorithmic feeds, deep writing gives us the space to process nuanced thoughts. Providing a brand or person with specific character traits makes it more human. A clearly defined personality generates deep attachment among its audience.'
       );
       setExcerpt('In an era dominated by 15-second clips, deep writing gives us the space to process nuanced thoughts.');
+      setIsDraft(false);
+      setIsPrivate(false);
       return;
     }
 
@@ -58,6 +63,7 @@ export default function CreateStudio() {
           setContent(postData.content || '');
           setExcerpt(postData.excerpt || '');
           setIsPrivate(postData.is_private ?? false);
+          setIsDraft(postData.is_draft ?? false);
         } else {
           alert('Could not fetch essay data for editing.');
           navigate('/dashboard');
@@ -119,8 +125,8 @@ export default function CreateStudio() {
     window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank');
   };
 
-  // 2. Publish or Update Essay (Handles POST and PUT)
-  const handlePublishOrUpdate = async () => {
+  // 2. Publish, Update, or Save Draft
+  const handleSave = async (saveAsDraft: boolean) => {
     if (!title.trim() || !content.trim()) {
       alert('Please fill out both the title and content!');
       return;
@@ -134,6 +140,9 @@ export default function CreateStudio() {
 
     const method = isEditMode ? 'PUT' : 'POST';
 
+    // If saving as draft, force is_private to true so it doesn't leak to public feed
+    const finalIsPrivate = saveAsDraft ? true : isPrivate;
+
     try {
       const response = await fetch(endpoint, {
         method,
@@ -141,26 +150,32 @@ export default function CreateStudio() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          user_id: 1, // Matches inserted user_id in PostgreSQL
+          user_id: 1,
           title,
           content,
           excerpt: excerpt || title,
-          is_private: isPrivate,
+          is_private: finalIsPrivate,
+          is_draft: saveAsDraft, // Explicitly false when Publishing, true when saving Draft
         }),
       });
 
       if (response.ok) {
-         // Send the user to the dashboard with the appropriate toast message
-         navigate('/dashboard', {
-           state: {
-             message: isEditMode
-               ? 'Essay updated successfully!'
-               : 'Essay published successfully!',
-          },
-         });
+        setIsDraft(saveAsDraft); // Keeps local state in sync
+        setIsPrivate(finalIsPrivate);
+
+        let toastMessage = 'Essay published successfully!';
+        if (saveAsDraft) {
+          toastMessage = 'Draft saved successfully!';
+        } else if (isEditMode) {
+          toastMessage = 'Essay updated successfully!';
+        }
+
+        navigate('/dashboard', {
+          state: { message: toastMessage },
+        });
       } else {
-          const errorData = await response.json();
-          alert(`Failed to save: ${errorData.message || 'Server error'}`);
+        const errorData = await response.json();
+        alert(`Failed to save: ${errorData.message || 'Server error'}`);
       }
     } catch (err) {
       console.error('Save error:', err);
@@ -198,11 +213,11 @@ export default function CreateStudio() {
             type="button"
             onClick={() => navigate('/dashboard', { state: { message: 'Cancelled update.' } })}
             className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition ${
-            theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
+              theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
             }`}
           >
-           <ArrowLeft className="w-3.5 h-3.5" />
-           <span>Cancel Edit</span>
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Cancel Edit</span>
           </button>
         )}
       </div>
@@ -240,7 +255,7 @@ export default function CreateStudio() {
 
           {/* Featured Excerpt Input */}
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-brand-terracotta mb-2 flex items-center gap-1.5 font-bold">
+            <label className="block text-xs uppercase tracking-wider text-brand-terracotta mb-2 font-bold flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5" />
               <span>Featured Excerpt for Poster</span>
             </label>
@@ -253,38 +268,59 @@ export default function CreateStudio() {
             />
           </div>
 
-          {/* Controls: Visibility Toggle & Save/Publish Button */}
+          {/* Controls: Visibility Toggle, Draft State & Save/Publish Actions */}
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-black/10">
-            <button
-              type="button"
-              onClick={() => setIsPrivate(!isPrivate)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition ${
-                isPrivate 
-                  ? 'bg-amber-100 text-amber-900 border-amber-300' 
-                  : 'bg-emerald-100 text-emerald-900 border-emerald-300'
-              }`}
-            >
-              {isPrivate ? <Lock className="w-3.5 h-3.5" /> : <Globe className="w-3.5 h-3.5" />}
-              <span>{isPrivate ? 'Private Post' : 'Public Article'}</span>
-            </button>
+            {/* Toggles Group */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsPrivate(!isPrivate)}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition ${
+                  isPrivate 
+                    ? 'bg-amber-100 text-amber-900 border-amber-300' 
+                    : 'bg-emerald-100 text-emerald-900 border-emerald-300'
+                }`}
+              >
+                {isPrivate ? <Lock className="w-3.5 h-3.5" /> : <Globe className="w-3.5 h-3.5" />}
+                <span>{isPrivate ? 'Private Post' : 'Public Article'}</span>
+              </button>
 
-            <button 
-              type="button"
-              onClick={handlePublishOrUpdate}
-              disabled={isSubmitting}
-              className="flex items-center gap-2 bg-brand-terracotta hover:bg-brand-terracotta/90 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider px-6 py-3 rounded-full shadow-md transition"
-            >
-              <Save className="w-4 h-4" />
-              <span>
-                {isSubmitting
-                  ? isEditMode
-                    ? 'Saving...'
-                    : 'Publishing...'
-                  : isEditMode
-                  ? 'Update Essay'
-                  : 'Publish Article'}
-              </span>
-            </button>
+              {isDraft && (
+                <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-200 text-gray-700 border border-gray-300">
+                  <FileText className="w-3.5 h-3.5" />
+                  <span>Draft Mode</span>
+                </span>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex items-center gap-2">
+              <button 
+                type="button"
+                onClick={() => handleSave(true)}
+                disabled={isSubmitting}
+                className="flex items-center gap-1.5 bg-black/10 hover:bg-black/20 text-[#1A1A1A] disabled:opacity-50 font-bold text-xs uppercase tracking-wider px-4 py-3 rounded-full transition cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                <span>{isSubmitting ? 'Saving...' : 'Save Draft'}</span>
+              </button>
+
+              <button 
+                type="button"
+                onClick={() => handleSave(false)}
+                disabled={isSubmitting}
+                className="flex items-center gap-1.5 bg-brand-terracotta hover:bg-brand-terracotta/90 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider px-6 py-3 rounded-full shadow-md transition cursor-pointer"
+              >
+                <Send className="w-4 h-4" />
+                <span>
+                  {isSubmitting
+                    ? 'Processing...'
+                    : isEditMode
+                    ? 'Update Essay'
+                    : 'Publish Article'}
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -334,7 +370,7 @@ export default function CreateStudio() {
                 JAMBLOG ESSAY EXCERPT
               </span>
               <p className={`font-serif leading-snug ${
-                posterStyle === 'bold' ? 'text-2xl font-black' : 'text-xl italic font-serif'
+                posterStyle === 'bold' ? 'text-2xl font-black' : 'text-xl italic'
               }`}>
                 "{excerpt || 'Your highlight quote will appear here...'}"
               </p>
@@ -343,7 +379,7 @@ export default function CreateStudio() {
             <div className="pt-6 border-t border-current/20 flex items-center justify-between text-xs">
               <div>
                 <p className="font-serif font-bold text-sm">{title || 'Untitled Essay'}</p>
-                <p className="opacity-70 text-[11px]">by Jaheim Deandre</p>
+                <p className="opacity-70 text-[11px]">by Author</p>
               </div>
               <span className="font-bold tracking-widest text-[10px] uppercase opacity-50">
                 JamBlog
@@ -359,7 +395,7 @@ export default function CreateStudio() {
               type="button"
               onClick={handleExportPoster}
               disabled={isGenerating}
-              className="w-full flex items-center justify-center gap-2 bg-brand-ink text-brand-cream hover:bg-brand-terracotta py-3 px-4 rounded-2xl text-xs font-bold uppercase tracking-wider shadow transition disabled:opacity-50"
+              className="w-full flex items-center justify-center gap-2 bg-brand-ink text-brand-cream hover:bg-brand-terracotta py-3 px-4 rounded-2xl text-xs font-bold uppercase tracking-wider shadow transition disabled:opacity-50 cursor-pointer"
             >
               <Download className="w-4 h-4" />
               <span>{isGenerating ? 'Generating Poster...' : 'Download Social Poster (PNG)'}</span>

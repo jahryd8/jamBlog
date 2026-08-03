@@ -24,3 +24,13 @@ body {
   color: var(--color-brand-ink);
   font-family: var(--font-sans);
 }
+
+/* for a subtle cosmic atmosphere */
+body {
+  background-color: #070913;
+  background-image: 
+    radial-gradient(at 10% 10%, rgba(139, 92, 246, 0.15) 0px, transparent 50%),
+    radial-gradient(at 90% 80%, rgba(6, 182, 212, 0.12) 0px, transparent 50%),
+    radial-gradient(at 50% 50%, rgba(255, 123, 84, 0.08) 0px, transparent 60%);
+  background-attachment: fixed;
+}

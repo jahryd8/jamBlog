@@ -4,7 +4,7 @@ import { useTheme } from '../context/ThemeContext';
 import { 
   Heart, 
   Bookmark, 
-  FileText, 
+  //FileText, 
   Plus, 
   Trash2, 
   Eye, 
@@ -14,7 +14,9 @@ import {
   Edit3,
   X,
   CheckCircle2,
-  Info
+  Info,
+  FileEdit,
+  Globe
 } from 'lucide-react';
 
 interface MyPost {
@@ -51,7 +53,9 @@ export default function Dashboard() {
   const [totalLikes, setTotalLikes] = useState<number>(0);
   const [totalLikesGiven, setTotalLikesGiven] = useState<number>(0);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'my-posts' | 'bookmarks'>('my-posts');
+  
+  // Tabs: 'published' | 'drafts' | 'bookmarks'
+  const [activeTab, setActiveTab] = useState<'published' | 'drafts' | 'bookmarks'>('published');
 
   // Track which post ID is currently confirming deletion
   const [deletingPostId, setDeletingPostId] = useState<number | null>(null);
@@ -90,7 +94,7 @@ export default function Dashboard() {
     }
   };
 
-  // Toggle Visibility (Public / Private)
+  // Toggle Visibility / Publish Draft
   const handleTogglePrivate = async (postId: number, currentPrivateStatus: boolean) => {
     try {
       const res = await fetch(`http://localhost:5000/api/posts/${postId}/visibility`, {
@@ -104,6 +108,7 @@ export default function Dashboard() {
             post.post_id === postId ? { ...post, is_private: !currentPrivateStatus } : post
           )
         );
+        setToastMessage(currentPrivateStatus ? 'Draft published to feed!' : 'Essay moved to private drafts.');
       }
     } catch (err) {
       console.error('Failed to toggle post visibility:', err);
@@ -128,6 +133,10 @@ export default function Dashboard() {
       setIsDeleting(false);
     }
   };
+
+  // Filtered post arrays
+  const publishedPosts = myPosts.filter((post) => !post.is_private);
+  const draftPosts = myPosts.filter((post) => post.is_private);
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-8">
@@ -161,7 +170,7 @@ export default function Dashboard() {
           <h1 className={`font-serif text-3xl sm:text-4xl font-bold ${theme === 'dark' ? 'text-white' : 'text-brand-ink'}`}>
             Author Dashboard
           </h1>
-          <p className="text-xs opacity-60 mt-1">Manage your published essays, view engagement, and browse bookmarks.</p>
+          <p className="text-xs opacity-60 mt-1">Manage your drafts, published essays, and saved bookmarks.</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -186,24 +195,40 @@ export default function Dashboard() {
       </div>
 
       {/* Overview Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        {/* 1. My Essays */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {/* 1. Published Essays */}
         <div
-          onClick={() => setActiveTab('my-posts')}
+          onClick={() => setActiveTab('published')}
           className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition hover:border-brand-terracotta/50 ${
-            theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
-          }`}
+            activeTab === 'published' ? 'ring-2 ring-brand-terracotta/50' : ''
+          } ${theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'}`}
         >
           <div className="p-3 rounded-2xl bg-brand-terracotta/10 text-brand-terracotta">
-            <FileText className="w-5 h-5" />
+            <Globe className="w-5 h-5" />
           </div>
           <div>
-            <div className="text-2xl font-bold font-serif">{loading ? '...' : myPosts.length}</div>
-            <div className="text-xs opacity-60 font-medium">My Essays</div>
+            <div className="text-2xl font-bold font-serif">{loading ? '...' : publishedPosts.length}</div>
+            <div className="text-xs opacity-60 font-medium">Published</div>
           </div>
         </div>
 
-        {/* 2. Likes Received */}
+        {/* 2. Private Drafts */}
+        <div
+          onClick={() => setActiveTab('drafts')}
+          className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition hover:border-amber-500/50 ${
+            activeTab === 'drafts' ? 'ring-2 ring-amber-500/50' : ''
+          } ${theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'}`}
+        >
+          <div className="p-3 rounded-2xl bg-amber-500/10 text-amber-500">
+            <FileEdit className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold font-serif">{loading ? '...' : draftPosts.length}</div>
+            <div className="text-xs opacity-60 font-medium">Drafts</div>
+          </div>
+        </div>
+
+        {/* 3. Likes Received */}
         <div
           className={`p-5 rounded-3xl border flex items-center gap-4 transition ${
             theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
@@ -214,17 +239,15 @@ export default function Dashboard() {
           </div>
           <div>
             <div className="text-2xl font-bold font-serif">{loading ? '...' : totalLikes}</div>
-            <div className="text-xs opacity-60 font-medium">Likes Received</div>
+            <div className="text-xs opacity-60 font-medium">Likes</div>
           </div>
         </div>
 
-        {/* 3. Likes Given */}
-        <div
-          className={`p-5 rounded-3xl border flex items-center gap-4 transition ${
-            theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
-          }`}
-        >
-          <div className="p-3 rounded-2xl bg-sky-500/10 text-sky-500">
+        {/* Likes Given Stat Card */}
+        <div className={`p-5 rounded-3xl border flex items-center gap-4 transition ${
+           theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
+        }`}>
+          <div className="p-3 rounded-2xl bg-purple-500/10 text-purple-500">
             <Heart className="w-5 h-5" />
           </div>
           <div>
@@ -236,16 +259,16 @@ export default function Dashboard() {
         {/* 4. Bookmarks */}
         <div
           onClick={() => setActiveTab('bookmarks')}
-          className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition hover:border-amber-500/50 ${
-            theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
-          }`}
+          className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition hover:border-sky-500/50 ${
+            activeTab === 'bookmarks' ? 'ring-2 ring-sky-500/50' : ''
+          } ${theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'}`}
         >
-          <div className="p-3 rounded-2xl bg-amber-500/10 text-amber-500">
+          <div className="p-3 rounded-2xl bg-sky-500/10 text-sky-500">
             <Bookmark className="w-5 h-5 fill-current" />
           </div>
           <div>
             <div className="text-2xl font-bold font-serif">{loading ? '...' : savedPosts.length}</div>
-            <div className="text-xs opacity-60 font-medium">Saved Bookmarks</div>
+            <div className="text-xs opacity-60 font-medium">Bookmarks</div>
           </div>
         </div>
       </div>
@@ -253,16 +276,30 @@ export default function Dashboard() {
       {/* Tabs Header */}
       <div className="flex border-b border-current/10 gap-6 text-sm font-semibold">
         <button
-          onClick={() => setActiveTab('my-posts')}
+          onClick={() => setActiveTab('published')}
           className={`pb-3 transition relative flex items-center gap-2 ${
-            activeTab === 'my-posts'
+            activeTab === 'published'
               ? 'text-brand-terracotta border-b-2 border-brand-terracotta'
               : 'opacity-60 hover:opacity-100'
           }`}
         >
-          <span>My Essays</span>
+          <span>Published Essays</span>
           <span className="px-2 py-0.5 text-[10px] rounded-full bg-current/10 font-mono">
-            {myPosts.length}
+            {publishedPosts.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('drafts')}
+          className={`pb-3 transition relative flex items-center gap-2 ${
+            activeTab === 'drafts'
+              ? 'text-amber-500 border-b-2 border-amber-500'
+              : 'opacity-60 hover:opacity-100'
+          }`}
+        >
+          <span>Drafts</span>
+          <span className="px-2 py-0.5 text-[10px] rounded-full bg-amber-500/20 text-amber-500 font-mono">
+            {draftPosts.length}
           </span>
         </button>
 
@@ -274,36 +311,36 @@ export default function Dashboard() {
               : 'opacity-60 hover:opacity-100'
           }`}
         >
-          <span>Saved Reading List</span>
+          <span>Bookmarks</span>
           <span className="px-2 py-0.5 text-[10px] rounded-full bg-current/10 font-mono">
             {savedPosts.length}
           </span>
         </button>
       </div>
 
-      {/* Tab 1: My Essays Section */}
-      {activeTab === 'my-posts' && (
+      {/* Tab 1: Published Essays */}
+      {activeTab === 'published' && (
         <section className="space-y-4">
           {loading ? (
-            <p className="text-xs opacity-60 text-center py-8 font-serif">Loading your essays...</p>
-          ) : myPosts.length === 0 ? (
+            <p className="text-xs opacity-60 text-center py-8 font-serif">Loading essays...</p>
+          ) : publishedPosts.length === 0 ? (
             <div
               className={`p-10 text-center rounded-3xl border space-y-3 ${
                 theme === 'dark' ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-black/10'
               }`}
             >
-              <FileText className="w-8 h-8 mx-auto opacity-40 text-brand-terracotta" />
-              <p className="text-xs opacity-70">You haven't written any essays yet.</p>
+              <Globe className="w-8 h-8 mx-auto opacity-40 text-brand-terracotta" />
+              <p className="text-xs opacity-70">You haven't published any essays publicly yet.</p>
               <Link
                 to="/create"
                 className="inline-block px-4 py-2 bg-brand-terracotta text-white rounded-full text-xs font-bold"
               >
-                Start Writing
+                Write an Essay
               </Link>
             </div>
           ) : (
             <div className="space-y-4">
-              {myPosts.map((post) => (
+              {publishedPosts.map((post) => (
                 <article
                   key={post.post_id}
                   className={`p-6 rounded-3xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
@@ -314,10 +351,8 @@ export default function Dashboard() {
                     <div className="flex items-center gap-2 text-[10px] opacity-60">
                       <span>{new Date(post.created_at).toLocaleDateString()}</span>
                       <span>•</span>
-                      <span className={`px-2 py-0.5 rounded-full font-medium ${
-                        post.is_private ? 'bg-amber-500/10 text-amber-500' : 'bg-emerald-500/10 text-emerald-500'
-                      }`}>
-                        {post.is_private ? 'Private Draft' : 'Published'}
+                      <span className="px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-500">
+                        Published
                       </span>
                     </div>
 
@@ -341,10 +376,9 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  {/* Actions Bar / Inline Delete Confirmation */}
+                  {/* Actions */}
                   <div className="flex items-center gap-2 pt-2 sm:pt-0 border-t sm:border-0 border-current/10">
                     {deletingPostId === post.post_id ? (
-                      /* INLINE CONFIRMATION UI */
                       <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 p-1.5 rounded-2xl animate-fade-in">
                         <span className="text-[11px] font-semibold text-rose-500 px-2">Delete?</span>
                         <button
@@ -357,22 +391,20 @@ export default function Dashboard() {
                         <button
                           onClick={() => setDeletingPostId(null)}
                           className="p-1 rounded-xl text-xs hover:bg-current/10 transition"
-                          title="Cancel"
                         >
                           <X className="w-4 h-4" />
                         </button>
                       </div>
                     ) : (
-                      /* STANDARD BUTTONS */
                       <>
                         <button
                           onClick={() => handleTogglePrivate(post.post_id, post.is_private)}
-                          title={post.is_private ? 'Make Public' : 'Make Private'}
+                          title="Unpublish to Drafts"
                           className={`p-2 rounded-xl border text-xs transition ${
                             theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
                           }`}
                         >
-                          {post.is_private ? <Eye className="w-4 h-4 text-emerald-500" /> : <EyeOff className="w-4 h-4 text-amber-500" />}
+                          <EyeOff className="w-4 h-4 text-amber-500" />
                         </button>
 
                         <Link
@@ -402,7 +434,111 @@ export default function Dashboard() {
         </section>
       )}
 
-      {/* Tab 2: Saved Reading List Section */}
+      {/* Tab 2: Drafts */}
+      {activeTab === 'drafts' && (
+        <section className="space-y-4">
+          {loading ? (
+            <p className="text-xs opacity-60 text-center py-8 font-serif">Loading drafts...</p>
+          ) : draftPosts.length === 0 ? (
+            <div
+              className={`p-10 text-center rounded-3xl border space-y-3 ${
+                theme === 'dark' ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-black/10'
+              }`}
+            >
+              <FileEdit className="w-8 h-8 mx-auto opacity-40 text-amber-500" />
+              <p className="text-xs opacity-70">No drafts found. Thoughts you save as private drafts will show up here.</p>
+              <Link
+                to="/create"
+                className="inline-block px-4 py-2 bg-amber-500 text-white rounded-full text-xs font-bold"
+              >
+                Start a New Draft
+              </Link>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {draftPosts.map((post) => (
+                <article
+                  key={post.post_id}
+                  className={`p-6 rounded-3xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                    theme === 'dark' ? 'bg-[#1E1E1E] border-white/10 text-white' : 'bg-white border-black/10 text-brand-ink'
+                  }`}
+                >
+                  <div className="space-y-2 max-w-xl">
+                    <div className="flex items-center gap-2 text-[10px] opacity-60">
+                      <span>Saved {new Date(post.created_at).toLocaleDateString()}</span>
+                      <span>•</span>
+                      <span className="px-2 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-500">
+                        Private Draft
+                      </span>
+                    </div>
+
+                    <h3 className="font-serif text-lg font-bold">
+                      <Link to={`/edit/${post.post_id}`} className="hover:text-amber-500 transition">
+                        {post.title || 'Untitled Draft'}
+                      </Link>
+                    </h3>
+
+                    <p className="text-xs opacity-75 line-clamp-2 leading-relaxed">{post.excerpt || 'No summary excerpt added yet.'}</p>
+                  </div>
+
+                  {/* Draft Actions */}
+                  <div className="flex items-center gap-2 pt-2 sm:pt-0 border-t sm:border-0 border-current/10">
+                    {deletingPostId === post.post_id ? (
+                      <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 p-1.5 rounded-2xl animate-fade-in">
+                        <span className="text-[11px] font-semibold text-rose-500 px-2">Delete?</span>
+                        <button
+                          disabled={isDeleting}
+                          onClick={() => confirmDeletePost(post.post_id)}
+                          className="px-3 py-1 bg-rose-500 text-white rounded-xl text-xs font-bold hover:bg-rose-600 transition disabled:opacity-50"
+                        >
+                          {isDeleting ? 'Deleting...' : 'Confirm'}
+                        </button>
+                        <button
+                          onClick={() => setDeletingPostId(null)}
+                          className="p-1 rounded-xl text-xs hover:bg-current/10 transition"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => handleTogglePrivate(post.post_id, post.is_private)}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-xl text-xs font-bold transition"
+                          title="Publish directly to public feed"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Publish</span>
+                        </button>
+
+                        <Link
+                          to={`/edit/${post.post_id}`}
+                          title="Continue Editing"
+                          className={`p-2 rounded-xl border text-xs transition ${
+                            theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
+                          }`}
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </Link>
+
+                        <button
+                          onClick={() => setDeletingPostId(post.post_id)}
+                          title="Delete Draft"
+                          className="p-2 rounded-xl border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition text-xs"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Tab 3: Saved Bookmarks */}
       {activeTab === 'bookmarks' && (
         <section className="space-y-4">
           {savedPosts.length === 0 ? (
@@ -411,7 +547,7 @@ export default function Dashboard() {
                 theme === 'dark' ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-black/10'
               }`}
             >
-              <Bookmark className="w-8 h-8 mx-auto opacity-40 text-amber-500 mb-2" />
+              <Bookmark className="w-8 h-8 mx-auto opacity-40 text-sky-500 mb-2" />
               <p className="text-xs opacity-60">You haven't saved any essays yet! Bookmark posts from the feed to read them later.</p>
             </div>
           ) : (

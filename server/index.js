@@ -31,6 +31,7 @@ app.get('/api/posts/my-posts', async (req, res) => {
         p.title, 
         p.excerpt, 
         p.is_private, 
+        p.is_draft,
         p.created_at,
         (SELECT COUNT(*) FROM post_likes WHERE post_id = p.post_id) AS likes_count,
         (SELECT COUNT(*) FROM comments WHERE post_id = p.post_id) AS comments_count
@@ -46,14 +47,14 @@ app.get('/api/posts/my-posts', async (req, res) => {
   }
 });
 
-// 2. GET /api/posts - Fetch all public posts
+// 2. GET /api/posts - Fetch all public, published posts (Excludes drafts & private posts)
 app.get('/api/posts', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT posts.*, users.username, users.display_name 
        FROM posts 
        JOIN users ON posts.user_id = users.user_id 
-       WHERE is_private = false 
+       WHERE posts.is_private = false AND posts.is_draft = false 
        ORDER BY created_at DESC`
     );
     res.json(result.rows);
@@ -63,7 +64,7 @@ app.get('/api/posts', async (req, res) => {
   }
 });
 
-// 3. GET /api/posts/:id - Single Post Details
+// 3. GET /api/posts/:id - Single Post Details (Includes is_draft status)
 app.get('/api/posts/:id', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const currentUserId = 1;
@@ -81,6 +82,7 @@ app.get('/api/posts/:id', async (req, res) => {
         p.excerpt, 
         p.created_at, 
         p.is_private,
+        p.is_draft,
         p.user_id AS author_id, 
         COALESCE(u.username, 'Anonymous') AS username, 
         COALESCE(u.display_name, 'Author') AS display_name, 
@@ -111,14 +113,25 @@ app.get('/api/posts/:id', async (req, res) => {
 // 4. POST /api/posts - Create new essay
 app.post('/api/posts', async (req, res) => {
   try {
-    const { user_id, title, content, excerpt, is_private } = req.body;
+    const { user_id, title, content, excerpt, is_private, is_draft } = req.body;
     const activeUserId = user_id ? user_id : 1;
 
+    // Use boolean check so false isn't overridden by default true/false fallbacks
+    const draftStatus = typeof is_draft === 'boolean' ? is_draft : false;
+    const privateStatus = typeof is_private === 'boolean' ? is_private : false;
+
     const newPost = await pool.query(
-      `INSERT INTO posts (user_id, title, content, excerpt, is_private) 
-       VALUES ($1, $2, $3, $4, $5) 
+      `INSERT INTO posts (user_id, title, content, excerpt, is_private, is_draft) 
+       VALUES ($1, $2, $3, $4, $5, $6) 
        RETURNING *`,
-      [activeUserId, title, content, excerpt || content?.slice(0, 150), is_private || false]
+      [
+        activeUserId,
+        title,
+        content,
+        excerpt || content?.slice(0, 150),
+        privateStatus,
+        draftStatus
+      ]
     );
 
     res.status(201).json(newPost.rows[0]);
@@ -180,7 +193,7 @@ app.delete('/api/posts/:id', async (req, res) => {
 // PUT /api/posts/:id - Edit / Update Essay
 app.put('/api/posts/:id', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
-  const { title, content, excerpt, is_private } = req.body;
+  const { title, content, excerpt, is_private, is_draft } = req.body;
   const userId = 1; // Active user ID
 
   if (isNaN(postId)) {
@@ -202,10 +215,19 @@ app.put('/api/posts/:id', async (req, res) => {
         content = $2, 
         excerpt = $3, 
         is_private = COALESCE($4, is_private),
+        is_draft = COALESCE($5, is_draft),
         updated_at = CURRENT_TIMESTAMP
-      WHERE post_id = $5 AND user_id = $6
+      WHERE post_id = $6 AND user_id = $7
       RETURNING *
-    `, [title.trim(), content.trim(), updatedExcerpt, is_private, postId, userId]);
+    `, [
+      title.trim(),
+      content.trim(),
+      updatedExcerpt,
+      is_private,
+      is_draft,
+      postId,
+      userId
+    ]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Post not found or unauthorized' });
