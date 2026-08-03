@@ -6,6 +6,7 @@ import CreateStudio from './pages/CreateStudio';
 import Settings from './pages/Settings';
 import AuthorProfile from './pages/AuthorProfile';
 import Feed from './pages/Feed';
+import PostDetail from './pages/PostDetail';
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/feed" element={<Feed />} />
           <Route path="/author/:username" element={<AuthorProfile />} />
+          <Route path="/post/:id" element={<PostDetail />} />
         </Routes>
       </main>
     </>
