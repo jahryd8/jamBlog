@@ -124,6 +124,90 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
+// PUT /api/users/profile - Update Logged-in User Profile
+app.put('/api/users/profile', authenticateToken, async (req, res) => {
+  const { display_name, bio } = req.body;
+  const userId = req.user.user_id;
+
+  try {
+    const result = await pool.query(
+      `UPDATE users 
+       SET display_name = COALESCE($1, display_name), 
+           bio = COALESCE($2, bio) 
+       WHERE user_id = $3 
+       RETURNING user_id, username, email, display_name, bio, avatar_url`,
+      [display_name, bio, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating profile:', err);
+    res.status(500).json({ message: 'Server error updating profile' });
+  }
+});
+
+// DELETE /api/users/account - Delete Logged-in User Account
+app.delete('/api/users/account', authenticateToken, async (req, res) => {
+  const userId = req.user.user_id;
+
+  try {
+    // Delete cascading relational records
+    await pool.query('DELETE FROM post_likes WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM saved_posts WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM comments WHERE user_id = $1', [userId]);
+    await pool.query('DELETE FROM user_follows WHERE follower_id = $1 OR following_id = $1', [userId]);
+    await pool.query('DELETE FROM posts WHERE user_id = $1', [userId]);
+
+    // Delete user
+    const result = await pool.query('DELETE FROM users WHERE user_id = $1 RETURNING *', [userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({ message: 'Account deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting account:', err);
+    res.status(500).json({ message: 'Server error deleting account' });
+  }
+});
+
+// PUT /api/users/change-password
+app.put('/api/users/change-password', authenticateToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const userId = req.user.user_id;
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ message: 'Current and new passwords are required.' });
+  }
+
+  try {
+    // 1. Fetch user to verify current password
+    const userResult = await pool.query('SELECT password_hash FROM users WHERE user_id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    const validPassword = await bcrypt.compare(currentPassword, userResult.rows[0].password_hash);
+    if (!validPassword) {
+      return res.status(400).json({ message: 'Incorrect current password.' });
+    }
+
+    // 2. Hash new password and update
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE user_id = $2', [newHash, userId]);
+
+    res.json({ message: 'Password updated successfully.' });
+  } catch (err) {
+    console.error('Error changing password:', err);
+    res.status(500).json({ message: 'Server error updating password.' });
+  }
+});
+
 
 // --- ESSAYS & POSTS ENDPOINTS ---
 
