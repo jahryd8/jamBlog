@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-  origin: 'http://localhost:5173', // Vite frontend URL
+  origin: ['http://localhost:5173','https://jamblog.vercel.app'], // Vite frontend URL AND VARCEL deployment URL
   credentials: true
 }));
 app.use(express.json());
