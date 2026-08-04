@@ -1,6 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const pool = require('./db');
+const authenticateToken = require('./middleware/auth');
 require('dotenv').config();
 
 const app = express();
@@ -18,11 +21,115 @@ app.get('/', (req, res) => {
   res.json({ status: 'API is running successfully!' });
 });
 
+// --- AUTHENTICATION & ACCOUNT ENDPOINTS ---
+
+// Register
+app.post('/api/auth/register', async (req, res) => {
+  const { username, email, password, display_name } = req.body;
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ message: 'Username, email, and password are required' });
+  }
+
+  try {
+    const existing = await pool.query(
+      'SELECT 1 FROM users WHERE username = $1 OR email = $2',
+      [username.trim(), email.trim()]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ message: 'Username or email is already in use' });
+    }
+
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    const newUser = await pool.query(
+      `INSERT INTO users (username, email, password_hash, display_name)
+       VALUES ($1, $2, $3, $4)
+       RETURNING user_id, username, email, display_name, bio, avatar_url`,
+      [username.trim(), email.trim(), hashedPassword, display_name || username.trim()]
+    );
+
+    const user = newUser.rows[0];
+
+    const token = jwt.sign(
+      { user_id: user.user_id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({ user, token });
+  } catch (err) {
+    console.error('Registration error:', err);
+    res.status(500).json({ message: 'Server error during registration' });
+  }
+});
+
+// Login
+app.post('/api/auth/login', async (req, res) => {
+  const { emailOrUsername, password } = req.body;
+
+  if (!emailOrUsername || !password) {
+    return res.status(400).json({ message: 'Email/Username and password are required' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE email = $1 OR username = $1',
+      [emailOrUsername.trim()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    const user = result.rows[0];
+    const validPassword = await bcrypt.compare(password, user.password_hash);
+
+    if (!validPassword) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
+    const token = jwt.sign(
+      { user_id: user.user_id, username: user.username },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    delete user.password_hash;
+
+    res.json({ user, token });
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ message: 'Server error during login' });
+  }
+});
+
+// Get Current Logged-in Session
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT user_id, username, email, display_name, bio, avatar_url FROM users WHERE user_id = $1',
+      [req.user.user_id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Session error:', err);
+    res.status(500).json({ message: 'Server error fetching user session' });
+  }
+});
+
+
 // --- ESSAYS & POSTS ENDPOINTS ---
 
-// 1. GET /api/posts/my-posts - MUST BE ABOVE /api/posts/:id
-app.get('/api/posts/my-posts', async (req, res) => {
-  const userId = 1; // Active user ID
+// 1. GET /api/posts/my-posts
+app.get('/api/posts/my-posts', authenticateToken, async (req, res) => {
+  const userId = req.user.user_id;
 
   try {
     const query = `
@@ -67,7 +174,19 @@ app.get('/api/posts', async (req, res) => {
 // 3. GET /api/posts/:id - Single Post Details
 app.get('/api/posts/:id', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
-  const currentUserId = 1;
+  const authHeader = req.headers['authorization'];
+  let currentUserId = null;
+
+  // Optional JWT detection for personalized fields (liked/bookmarked status)
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      currentUserId = decoded.user_id;
+    } catch (e) {
+      // Ignore token error if viewing public post anonymously
+    }
+  }
 
   if (isNaN(postId)) {
     return res.status(400).json({ message: 'Invalid Post ID' });
@@ -111,10 +230,10 @@ app.get('/api/posts/:id', async (req, res) => {
 });
 
 // 4. POST /api/posts - Create new essay
-app.post('/api/posts', async (req, res) => {
+app.post('/api/posts', authenticateToken, async (req, res) => {
   try {
-    const { user_id, title, content, excerpt, is_private, is_draft } = req.body;
-    const activeUserId = user_id ? user_id : 1;
+    const { title, content, excerpt, is_private, is_draft } = req.body;
+    const activeUserId = req.user.user_id;
 
     const draftStatus = typeof is_draft === 'boolean' ? is_draft : false;
     const privateStatus = typeof is_private === 'boolean' ? is_private : false;
@@ -141,10 +260,10 @@ app.post('/api/posts', async (req, res) => {
 });
 
 // 5. PATCH /api/posts/:id/visibility - Toggle Public/Private
-app.patch('/api/posts/:id/visibility', async (req, res) => {
+app.patch('/api/posts/:id/visibility', authenticateToken, async (req, res) => {
   const postId = req.params.id;
   const { is_private } = req.body;
-  const userId = 1;
+  const userId = req.user.user_id;
 
   try {
     const result = await pool.query(
@@ -164,11 +283,20 @@ app.patch('/api/posts/:id/visibility', async (req, res) => {
 });
 
 // 6. DELETE /api/posts/:id - Delete Essay
-app.delete('/api/posts/:id', async (req, res) => {
+app.delete('/api/posts/:id', authenticateToken, async (req, res) => {
   const postId = req.params.id;
-  const userId = 1;
+  const userId = req.user.user_id;
 
   try {
+    const checkPost = await pool.query('SELECT user_id FROM posts WHERE post_id = $1', [postId]);
+    if (checkPost.rows.length === 0) {
+      return res.status(404).json({ message: 'Post not found' });
+    }
+
+    if (checkPost.rows[0].user_id !== userId) {
+      return res.status(403).json({ message: 'Unauthorized to delete this post' });
+    }
+
     await pool.query('DELETE FROM post_likes WHERE post_id = $1', [postId]);
     await pool.query('DELETE FROM saved_posts WHERE post_id = $1', [postId]);
     await pool.query('DELETE FROM comments WHERE post_id = $1', [postId]);
@@ -178,10 +306,6 @@ app.delete('/api/posts/:id', async (req, res) => {
       [postId, userId]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Post not found or unauthorized' });
-    }
-
     res.json({ message: 'Post deleted successfully', deletedPostId: postId });
   } catch (err) {
     console.error('Error deleting post:', err);
@@ -190,10 +314,10 @@ app.delete('/api/posts/:id', async (req, res) => {
 });
 
 // PUT /api/posts/:id - Edit / Update Essay
-app.put('/api/posts/:id', async (req, res) => {
+app.put('/api/posts/:id', authenticateToken, async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const { title, content, excerpt, is_private, is_draft } = req.body;
-  const userId = 1;
+  const userId = req.user.user_id;
 
   if (isNaN(postId)) {
     return res.status(400).json({ message: 'Invalid Post ID' });
@@ -238,9 +362,22 @@ app.put('/api/posts/:id', async (req, res) => {
   }
 });
 
+
 // --- FEED SYSTEM ---
 app.get('/api/feed', async (req, res) => {
-  const currentUserId = 1;
+  const authHeader = req.headers['authorization'];
+  let currentUserId = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      currentUserId = decoded.user_id;
+    } catch (e) {
+      // Allow guest usage
+    }
+  }
+
   const filter = req.query.filter || 'all';
 
   try {
@@ -260,7 +397,7 @@ app.get('/api/feed', async (req, res) => {
       WHERE p.is_private = false AND p.is_draft = false
     `;
 
-    if (filter === 'following') {
+    if (filter === 'following' && currentUserId) {
       query += ` AND p.user_id IN (SELECT following_id FROM user_follows WHERE follower_id = $1)`;
     }
 
@@ -274,10 +411,11 @@ app.get('/api/feed', async (req, res) => {
   }
 });
 
+
 // --- LIKES & SAVES ENDPOINTS ---
-app.post('/api/posts/:id/like', async (req, res) => {
+app.post('/api/posts/:id/like', authenticateToken, async (req, res) => {
   const postId = parseInt(req.params.id, 10);
-  const userId = 1;
+  const userId = req.user.user_id;
 
   try {
     const check = await pool.query(
@@ -298,10 +436,9 @@ app.post('/api/posts/:id/like', async (req, res) => {
   }
 });
 
-// Handle BOTH /save and /bookmark endpoints seamlessly
 const handleSaveToggle = async (req, res) => {
   const postId = parseInt(req.params.id, 10);
-  const userId = 1;
+  const userId = req.user.user_id;
 
   try {
     const check = await pool.query(
@@ -322,8 +459,9 @@ const handleSaveToggle = async (req, res) => {
   }
 };
 
-app.post('/api/posts/:id/save', handleSaveToggle);
-app.post('/api/posts/:id/bookmark', handleSaveToggle);
+app.post('/api/posts/:id/save', authenticateToken, handleSaveToggle);
+app.post('/api/posts/:id/bookmark', authenticateToken, handleSaveToggle);
+
 
 // --- COMMENTS ENDPOINTS ---
 app.get('/api/posts/:id/comments', async (req, res) => {
@@ -347,10 +485,10 @@ app.get('/api/posts/:id/comments', async (req, res) => {
   }
 });
 
-app.post('/api/posts/:id/comments', async (req, res) => {
+app.post('/api/posts/:id/comments', authenticateToken, async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const { content, parent_comment_id, parent_id } = req.body;
-  const currentUserId = 1; 
+  const currentUserId = req.user.user_id; 
 
   if (isNaN(postId)) {
     return res.status(400).json({ message: 'Invalid Post ID parameter' });
@@ -400,9 +538,10 @@ app.post('/api/posts/:id/comments', async (req, res) => {
   }
 });
 
-app.patch('/api/comments/:commentId', async (req, res) => {
+app.patch('/api/comments/:commentId', authenticateToken, async (req, res) => {
   const commentId = parseInt(req.params.commentId, 10);
   const { content } = req.body;
+  const userId = req.user.user_id;
 
   if (isNaN(commentId)) {
     return res.status(400).json({ message: 'Invalid comment ID' });
@@ -412,9 +551,13 @@ app.patch('/api/comments/:commentId', async (req, res) => {
     const result = await pool.query(`
       UPDATE comments 
       SET content = $1
-      WHERE comment_id = $2
+      WHERE comment_id = $2 AND user_id = $3
       RETURNING *
-    `, [content, commentId]);
+    `, [content, commentId, userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Comment not found or unauthorized' });
+    }
 
     res.json(result.rows[0]);
   } catch (err) {
@@ -423,15 +566,21 @@ app.patch('/api/comments/:commentId', async (req, res) => {
   }
 });
 
-app.delete('/api/comments/:comment_id', async (req, res) => {
+app.delete('/api/comments/:comment_id', authenticateToken, async (req, res) => {
   const commentId = parseInt(req.params.comment_id, 10);
+  const userId = req.user.user_id;
 
   if (isNaN(commentId)) {
     return res.status(400).json({ message: 'Invalid comment ID' });
   }
 
   try {
-    await pool.query('DELETE FROM comments WHERE comment_id = $1', [commentId]);
+    const result = await pool.query('DELETE FROM comments WHERE comment_id = $1 AND user_id = $2 RETURNING *', [commentId, userId]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Comment not found or unauthorized' });
+    }
+
     res.status(200).json({ message: 'Comment deleted successfully' });
   } catch (err) {
     console.error('Error deleting comment:', err);
@@ -439,10 +588,22 @@ app.delete('/api/comments/:comment_id', async (req, res) => {
   }
 });
 
+
 // --- USER & FOLLOW SYSTEM ---
 app.get('/api/users/:username', async (req, res) => {
   const { username } = req.params;
-  const currentUserId = 1;
+  const authHeader = req.headers['authorization'];
+  let currentUserId = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    try {
+      const token = authHeader.split(' ')[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      currentUserId = decoded.user_id;
+    } catch (e) {
+      // Optional authentication
+    }
+  }
 
   try {
     const userQuery = `
@@ -483,9 +644,9 @@ app.get('/api/users/:username', async (req, res) => {
   }
 });
 
-app.post('/api/users/:id/follow', async (req, res) => {
+app.post('/api/users/:id/follow', authenticateToken, async (req, res) => {
   const targetUserId = parseInt(req.params.id, 10);
-  const followerId = 1;
+  const followerId = req.user.user_id;
 
   if (followerId === targetUserId) {
     return res.status(400).json({ message: "You can't follow yourself" });
@@ -534,6 +695,7 @@ app.get('/api/users/:id/following', async (req, res) => {
   }
 });
 
+
 // --- SEARCH ---
 app.get('/api/search', async (req, res) => {
   const query = req.query.q;
@@ -574,9 +736,10 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
+
 // --- DASHBOARD STATS ---
-app.get('/api/dashboard/stats', async (req, res) => {
-  const currentUserId = 1;
+app.get('/api/dashboard/stats', authenticateToken, async (req, res) => {
+  const currentUserId = req.user.user_id;
 
   try {
     const receivedRes = await pool.query(
