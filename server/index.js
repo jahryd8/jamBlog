@@ -10,8 +10,6 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-import cors from 'cors';
-
 const corsOptions = {
   origin: ['http://localhost:5173', 'https://jam-blog-rosy.vercel.app'],
   credentials: true,
