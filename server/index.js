@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-  origin: 'http://localhost:5173', // Replace with my Vite frontend URL/port
+  origin: 'http://localhost:5173', // Vite frontend URL
   credentials: true
 }));
 app.use(express.json());
@@ -33,8 +33,8 @@ app.get('/api/posts/my-posts', async (req, res) => {
         p.is_private, 
         p.is_draft,
         p.created_at,
-        (SELECT COUNT(*) FROM post_likes WHERE post_id = p.post_id) AS likes_count,
-        (SELECT COUNT(*) FROM comments WHERE post_id = p.post_id) AS comments_count
+        (SELECT COUNT(*)::INT FROM post_likes WHERE post_id = p.post_id) AS likes_count,
+        (SELECT COUNT(*)::INT FROM comments WHERE post_id = p.post_id) AS comments_count
       FROM posts p
       WHERE p.user_id = $1
       ORDER BY p.created_at DESC;
@@ -47,7 +47,7 @@ app.get('/api/posts/my-posts', async (req, res) => {
   }
 });
 
-// 2. GET /api/posts - Fetch all public, published posts (Excludes drafts & private posts)
+// 2. GET /api/posts - Fetch all public, published posts
 app.get('/api/posts', async (req, res) => {
   try {
     const result = await pool.query(
@@ -64,7 +64,7 @@ app.get('/api/posts', async (req, res) => {
   }
 });
 
-// 3. GET /api/posts/:id - Single Post Details (Includes is_draft status)
+// 3. GET /api/posts/:id - Single Post Details
 app.get('/api/posts/:id', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const currentUserId = 1;
@@ -88,8 +88,8 @@ app.get('/api/posts/:id', async (req, res) => {
         COALESCE(u.display_name, 'Author') AS display_name, 
         u.bio, 
         u.avatar_url,
-        (SELECT COUNT(*) FROM post_likes WHERE post_id = p.post_id) AS likes_count,
-        (SELECT COUNT(*) FROM comments WHERE post_id = p.post_id) AS comments_count,
+        (SELECT COUNT(*)::INT FROM post_likes WHERE post_id = p.post_id) AS likes_count,
+        (SELECT COUNT(*)::INT FROM comments WHERE post_id = p.post_id) AS comments_count,
         EXISTS(SELECT 1 FROM post_likes WHERE post_id = p.post_id AND user_id = $1) AS is_liked,
         EXISTS(SELECT 1 FROM saved_posts WHERE post_id = p.post_id AND user_id = $1) AS is_bookmarked,
         EXISTS(SELECT 1 FROM user_follows WHERE follower_id = $1 AND following_id = p.user_id) AS is_following_author
@@ -116,7 +116,6 @@ app.post('/api/posts', async (req, res) => {
     const { user_id, title, content, excerpt, is_private, is_draft } = req.body;
     const activeUserId = user_id ? user_id : 1;
 
-    // Use boolean check so false isn't overridden by default true/false fallbacks
     const draftStatus = typeof is_draft === 'boolean' ? is_draft : false;
     const privateStatus = typeof is_private === 'boolean' ? is_private : false;
 
@@ -194,7 +193,7 @@ app.delete('/api/posts/:id', async (req, res) => {
 app.put('/api/posts/:id', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const { title, content, excerpt, is_private, is_draft } = req.body;
-  const userId = 1; // Active user ID
+  const userId = 1;
 
   if (isNaN(postId)) {
     return res.status(400).json({ message: 'Invalid Post ID' });
@@ -205,7 +204,6 @@ app.put('/api/posts/:id', async (req, res) => {
   }
 
   try {
-    // Generate new excerpt if not provided
     const updatedExcerpt = excerpt || content.slice(0, 150);
 
     const result = await pool.query(`
@@ -254,12 +252,12 @@ app.get('/api/feed', async (req, res) => {
         p.created_at,
         u.username, 
         u.display_name,
-        (SELECT COUNT(*) FROM post_likes WHERE post_id = p.post_id) AS likes_count,
+        (SELECT COUNT(*)::INT FROM post_likes WHERE post_id = p.post_id) AS likes_count,
         EXISTS(SELECT 1 FROM post_likes WHERE post_id = p.post_id AND user_id = $1) AS is_liked,
         EXISTS(SELECT 1 FROM saved_posts WHERE post_id = p.post_id AND user_id = $1) AS is_saved
       FROM posts p
       JOIN users u ON p.user_id = u.user_id
-      WHERE p.is_private = false
+      WHERE p.is_private = false AND p.is_draft = false
     `;
 
     if (filter === 'following') {
@@ -300,7 +298,8 @@ app.post('/api/posts/:id/like', async (req, res) => {
   }
 });
 
-app.post('/api/posts/:id/save', async (req, res) => {
+// Handle BOTH /save and /bookmark endpoints seamlessly
+const handleSaveToggle = async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const userId = 1;
 
@@ -312,50 +311,21 @@ app.post('/api/posts/:id/save', async (req, res) => {
 
     if (check.rows.length > 0) {
       await pool.query(`DELETE FROM saved_posts WHERE user_id = $1 AND post_id = $2`, [userId, postId]);
-      res.json({ bookmarked: false });
+      res.json({ bookmarked: false, is_saved: false, is_bookmarked: false });
     } else {
       await pool.query(`INSERT INTO saved_posts (user_id, post_id) VALUES ($1, $2)`, [userId, postId]);
-      res.json({ bookmarked: true });
+      res.json({ bookmarked: true, is_saved: true, is_bookmarked: true });
     }
   } catch (err) {
-    console.error('Error toggling save:', err);
+    console.error('Error toggling save/bookmark:', err);
     res.status(500).json({ message: 'Server error' });
   }
-});
+};
 
-// POST /api/posts/:id/bookmark - Toggle Bookmark
-app.post('/api/posts/:id/bookmark', async (req, res) => {
-  const postId = parseInt(req.params.id, 10);
-  const currentUserId = 1;
-
-  try {
-    const checkRes = await pool.query(
-      `SELECT 1 FROM saved_posts WHERE user_id = $1 AND post_id = $2`,
-      [currentUserId, postId]
-    );
-
-    if (checkRes.rows.length > 0) {
-      await pool.query(
-        `DELETE FROM saved_posts WHERE user_id = $1 AND post_id = $2`,
-        [currentUserId, postId]
-      );
-      res.json({ is_bookmarked: false });
-    } else {
-      await pool.query(
-        `INSERT INTO saved_posts (user_id, post_id) VALUES ($1, $2)`,
-        [currentUserId, postId]
-      );
-      res.json({ is_bookmarked: true });
-    }
-  } catch (err) {
-    console.error('Error toggling bookmark:', err);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
+app.post('/api/posts/:id/save', handleSaveToggle);
+app.post('/api/posts/:id/bookmark', handleSaveToggle);
 
 // --- COMMENTS ENDPOINTS ---
-
-// GET /api/posts/:id/comments
 app.get('/api/posts/:id/comments', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   try {
@@ -377,7 +347,6 @@ app.get('/api/posts/:id/comments', async (req, res) => {
   }
 });
 
-// POST /api/posts/:id/comments - Add or Reply to Comment
 app.post('/api/posts/:id/comments', async (req, res) => {
   const postId = parseInt(req.params.id, 10);
   const { content, parent_comment_id, parent_id } = req.body;
@@ -391,20 +360,17 @@ app.post('/api/posts/:id/comments', async (req, res) => {
     return res.status(400).json({ message: 'Comment content cannot be empty' });
   }
 
-  // Parse incoming parent reference safely
   const rawParent = parent_comment_id !== undefined ? parent_comment_id : parent_id;
   const parentId = (rawParent && !isNaN(parseInt(rawParent, 10))) 
     ? parseInt(rawParent, 10) 
     : null;
 
   try {
-    // Check if post exists
     const postCheck = await pool.query('SELECT post_id FROM posts WHERE post_id = $1', [postId]);
     if (postCheck.rows.length === 0) {
       return res.status(404).json({ message: 'Target post does not exist' });
     }
 
-    // Insert new comment
     const commentRes = await pool.query(`
       INSERT INTO comments (post_id, user_id, content, parent_comment_id)
       VALUES ($1, $2, $3, $4)
@@ -413,30 +379,6 @@ app.post('/api/posts/:id/comments', async (req, res) => {
 
     const newComment = commentRes.rows[0];
 
-    // Optional notification insertion
-    if (parentId) {
-      try {
-        const parentRes = await pool.query(
-          `SELECT user_id FROM comments WHERE comment_id = $1`, 
-          [parentId]
-        );
-
-        if (parentRes.rows.length > 0 && parentRes.rows[0].user_id) {
-          const parentAuthorId = parentRes.rows[0].user_id;
-
-          if (parentAuthorId !== currentUserId) {
-            await pool.query(`
-              INSERT INTO notifications (user_id, actor_id, post_id, type)
-              VALUES ($1, $2, $3, 'comment_reply')
-            `, [parentAuthorId, currentUserId, postId]);
-          }
-        }
-      } catch (notifErr) {
-        console.error('Non-critical notification insertion error:', notifErr.message);
-      }
-    }
-
-    // Join with user table for avatar/username rendering
     const fullComment = await pool.query(`
       SELECT 
         c.comment_id, c.post_id, c.user_id, c.content, 
@@ -458,7 +400,6 @@ app.post('/api/posts/:id/comments', async (req, res) => {
   }
 });
 
-// PATCH /api/comments/:commentId - Edit Comment
 app.patch('/api/comments/:commentId', async (req, res) => {
   const commentId = parseInt(req.params.commentId, 10);
   const { content } = req.body;
@@ -482,7 +423,6 @@ app.patch('/api/comments/:commentId', async (req, res) => {
   }
 });
 
-// DELETE /api/comments/:comment_id - Delete Comment
 app.delete('/api/comments/:comment_id', async (req, res) => {
   const commentId = parseInt(req.params.comment_id, 10);
 
@@ -500,7 +440,6 @@ app.delete('/api/comments/:comment_id', async (req, res) => {
 });
 
 // --- USER & FOLLOW SYSTEM ---
-
 app.get('/api/users/:username', async (req, res) => {
   const { username } = req.params;
   const currentUserId = 1;
@@ -509,8 +448,8 @@ app.get('/api/users/:username', async (req, res) => {
     const userQuery = `
       SELECT 
         u.user_id, u.username, u.display_name, u.bio, u.location, u.avatar_url,
-        (SELECT COUNT(*) FROM user_follows WHERE following_id = u.user_id) AS followers_count,
-        (SELECT COUNT(*) FROM user_follows WHERE follower_id = u.user_id) AS following_count,
+        (SELECT COUNT(*)::INT FROM user_follows WHERE following_id = u.user_id) AS followers_count,
+        (SELECT COUNT(*)::INT FROM user_follows WHERE follower_id = u.user_id) AS following_count,
         EXISTS(
           SELECT 1 FROM user_follows 
           WHERE follower_id = $1 AND following_id = u.user_id
@@ -529,7 +468,7 @@ app.get('/api/users/:username', async (req, res) => {
     const postsQuery = `
       SELECT post_id, title, excerpt, created_at 
       FROM posts 
-      WHERE user_id = $1 AND is_private = false 
+      WHERE user_id = $1 AND is_private = false AND is_draft = false
       ORDER BY created_at DESC;
     `;
     const postsResult = await pool.query(postsQuery, [profile.user_id]);
@@ -610,7 +549,7 @@ app.get('/api/search', async (req, res) => {
       SELECT p.post_id, p.title, p.excerpt, p.created_at, u.username, u.display_name
       FROM posts p
       JOIN users u ON p.user_id = u.user_id
-      WHERE p.is_private = false 
+      WHERE p.is_private = false AND p.is_draft = false
         AND (p.title ILIKE $1 OR p.excerpt ILIKE $1)
       ORDER BY p.created_at DESC
       LIMIT 5;
@@ -640,21 +579,18 @@ app.get('/api/dashboard/stats', async (req, res) => {
   const currentUserId = 1;
 
   try {
-    // Likes received on user's own posts
     const receivedRes = await pool.query(
-      `SELECT COUNT(*) FROM post_likes pl 
+      `SELECT COUNT(*)::INT FROM post_likes pl 
        JOIN posts p ON pl.post_id = p.post_id 
        WHERE p.user_id = $1`,
       [currentUserId]
     );
 
-    // Likes given by this user
     const givenRes = await pool.query(
-      `SELECT COUNT(*) FROM post_likes WHERE user_id = $1`,
+      `SELECT COUNT(*)::INT FROM post_likes WHERE user_id = $1`,
       [currentUserId]
     );
 
-    // Saved bookmarks
     const savedRes = await pool.query(
       `SELECT p.post_id, p.title, p.excerpt, sp.created_at, u.username, u.display_name
        FROM saved_posts sp
@@ -666,8 +602,8 @@ app.get('/api/dashboard/stats', async (req, res) => {
     );
 
     res.json({
-      totalLikesReceived: parseInt(receivedRes.rows[0].count, 10) || 0,
-      totalLikesGiven: parseInt(givenRes.rows[0].count, 10) || 0,
+      totalLikesReceived: receivedRes.rows[0].count || 0,
+      totalLikesGiven: givenRes.rows[0].count || 0,
       savedPosts: savedRes.rows
     });
   } catch (err) {
@@ -679,4 +615,4 @@ app.get('/api/dashboard/stats', async (req, res) => {
 // START SERVER
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-}); 
+});

@@ -18,19 +18,85 @@
   --color-brand-ink: #1A1A1A;
 }
 
-/* Global Body Styles */
+/* Default Light Mode Body Styles */
 body {
   background-color: var(--color-brand-cream);
   color: var(--color-brand-ink);
   font-family: var(--font-sans);
+  min-height: 100vh;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* for a subtle cosmic atmosphere */
-body {
+/* Cosmic Dark Mode Atmosphere (Applies ONLY in Dark Mode) */
+.dark body {
   background-color: #070913;
+  color: #F8FAFC;
   background-image: 
     radial-gradient(at 10% 10%, rgba(139, 92, 246, 0.15) 0px, transparent 50%),
     radial-gradient(at 90% 80%, rgba(6, 182, 212, 0.12) 0px, transparent 50%),
     radial-gradient(at 50% 50%, rgba(255, 123, 84, 0.08) 0px, transparent 60%);
   background-attachment: fixed;
+}
+
+@layer utilities {
+  /* Subtle Cosmic Grid Pattern for Dark Mode */
+  .bg-cosmic-grid {
+    background-size: 32px 32px;
+    background-image: radial-gradient(
+      circle,
+      rgba(255, 255, 255, 0.07) 1px,
+      transparent 1px
+    );
+  }
+
+  /* Fine Stardust Noise / Dot Overlay */
+  .bg-stardust {
+    background-size: 24px 24px;
+    background-image: radial-gradient(
+      circle,
+      rgba(168, 85, 247, 0.15) 1px,
+      transparent 1px
+    );
+  }
+
+  /* Glassmorphism Surface with Starlight Border */
+  .cosmic-card {
+    @apply backdrop-blur-md border transition-all duration-300;
+  }
+
+  .dark .cosmic-card {
+    background: linear-gradient(
+      135deg,
+      rgba(30, 30, 35, 0.7) 0%,
+      rgba(15, 16, 22, 0.8) 100%
+    );
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
+  .dark .cosmic-card:hover {
+    border-color: rgba(168, 85, 247, 0.35);
+    box-shadow: 0 0 25px -5px rgba(168, 85, 247, 0.15),
+                0 0 10px -2px rgba(245, 158, 11, 0.1);
+  }
+
+  /* Warm Paper Card for Light Mode */
+  html:not(.dark) .cosmic-card {
+    background: #FFFFFF;
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+
+  html:not(.dark) .cosmic-card:hover {
+    border-color: rgba(245, 158, 11, 0.4);
+    box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.05);
+  }
+}
+
+/* Slow Glowing Ambient Animation */
+@keyframes nebula-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(1) translateY(0); }
+  50% { opacity: 0.4; transform: scale(1.08) translateY(-10px); }
+}
+
+.animate-nebula {
+  animation: nebula-pulse 12s ease-in-out infinite;
 }
