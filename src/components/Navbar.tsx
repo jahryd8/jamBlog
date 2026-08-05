@@ -8,7 +8,7 @@ export default function Navbar() {
   const isActive = (path: string) => location.pathname === path;
 
   return (
-    <header className="flex flex-wrap items-center justify-between gap-y-4 max-w-6xl mx-auto px-4 pt-6 pb-6 mb-4 border-b border-current/10 w-full overflow-x-hidden">
+    <header className="flex flex-wrap items-center justify-between gap-y-4 max-w-6xl mx-auto px-4 pt-6 pb-6 mb-4 border-b border-current/10 w-full">
       {/* Brand Logo */}
       <Link to="/" className="flex items-center space-x-2">
         <span className="font-serif text-2xl sm:text-3xl font-bold tracking-tight hover:text-brand-terracotta transition">
