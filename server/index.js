@@ -20,7 +20,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Intercept preflight OPTIONS requests explicitly
 app.use(express.json());
 
 // --- HEALTH CHECK ---
