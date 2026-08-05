@@ -19,10 +19,18 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    // Allow server-to-server, Postman, or local non-browser requests (where origin is undefined)
+    if (!origin) return callback(null, true);
+
+    // Allow explicitly listed origins OR any Vercel deployment URL
+    const isAllowedOrigin = allowedOrigins.includes(origin);
+    const isVercelDomain = /\.vercel\.app$/.test(origin);
+
+    if (isAllowedOrigin || isVercelDomain) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      // Return false instead of throwing new Error() to avoid 500 status codes on preflight checks
+      callback(null, false);
     }
   },
   credentials: true,
@@ -30,7 +38,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
-app.use(cors(corsOptions)); // <--- This alone handles all CORS and OPTIONS preflights!
+app.use(cors(corsOptions));
 
 app.use(express.json());
 
