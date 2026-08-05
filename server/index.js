@@ -19,7 +19,6 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like Postman or server-to-server) or listed origins
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
@@ -31,9 +30,7 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
-app.use(cors(corsOptions));
-// Handle preflight requests safely in Express 5
-app.options('(.*)', cors(corsOptions));
+app.use(cors(corsOptions)); // <--- This alone handles all CORS and OPTIONS preflights!
 
 app.use(express.json());
 
