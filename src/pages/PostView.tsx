@@ -1,24 +1,28 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
-import { 
-  ArrowLeft, 
-  Heart, 
-  Bookmark, 
-  MessageSquare, 
-  Sun, 
-  Moon, 
+import {
+  ArrowLeft,
+  Heart,
+  Bookmark,
+  MessageSquare,
+  Sun,
+  Moon,
   Trash2,
-  UserPlus
+  UserPlus,
+  UserCheck
 } from 'lucide-react';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+// Sanitize base URL to ensure no trailing slash or duplicate /api prefix
+const rawBase = import.meta.env.VITE_API_BASE_URL || 'https://jamblog.onrender.com';
+const API_BASE_URL = rawBase.replace(/\/api\/?$/, '').replace(/\/$/, '');
 
 interface Author {
   user_id: number;
   username: string;
   display_name: string;
   bio?: string;
+  is_following?: boolean;
 }
 
 interface Post {
@@ -78,22 +82,17 @@ function CommentItem({ comment, depth = 0, theme, onReply, onDelete }: CommentIt
   const isDark = theme === 'dark';
 
   return (
-    <div
-      className={`space-y-3 ${
-        maxVisualDepth > 0 ? 'ml-4 sm:ml-6 pl-3 sm:pl-4 border-l-2 border-orange-500/30' : ''
-      }`}
-    >
-      <div
-        className={`p-5 rounded-2xl border transition shadow-sm ${
-          isDark 
-            ? 'bg-[#1E1E1E] border-white/10 text-slate-200' 
-            : 'bg-white border-slate-200 text-slate-800'
-        }`}
-      >
+    <div className={`space-y-3 ${maxVisualDepth > 0 ? 'ml-4 sm:ml-6 pl-3 sm:pl-4 border-l-2 border-orange-500/30' : ''}`}>
+      <div className={`p-5 rounded-2xl border transition shadow-sm ${
+        isDark ? 'bg-[#1E1E1E] border-white/10 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+      }`}>
         <div className="flex items-center justify-between text-xs mb-2">
-          <span className={`font-semibold ${isDark ? 'text-slate-200' : 'text-slate-900'}`}>
+          <Link 
+            to={`/author/${comment.username}`} 
+            className={`font-semibold hover:text-orange-500 transition ${isDark ? 'text-slate-200' : 'text-slate-900'}`}
+          >
             {comment.display_name || comment.username}
-          </span>
+          </Link>
           <div className="flex items-center gap-3">
             <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>
               {new Date(comment.created_at).toLocaleDateString()}
@@ -118,9 +117,7 @@ function CommentItem({ comment, depth = 0, theme, onReply, onDelete }: CommentIt
             type="button"
             onClick={() => onReply(comment.comment_id, comment.username)}
             className={`flex items-center gap-1 text-[11px] transition font-medium ${
-              isDark 
-                ? 'text-slate-400 hover:text-orange-500' 
-                : 'text-slate-500 hover:text-orange-500'
+              isDark ? 'text-slate-400 hover:text-orange-500' : 'text-slate-500 hover:text-orange-500'
             }`}
           >
             <span>Reply</span>
@@ -158,9 +155,15 @@ export default function PostView() {
   const [replyTo, setReplyTo] = useState<{ id: number; name: string } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [commentError, setCommentError] = useState<string | null>(null);
+  const [isFollowing, setIsFollowing] = useState(false);
 
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
   const isDark = theme === 'dark';
+
+  const getAuthHeaders = (): Record<string, string> => {
+    const token = localStorage.getItem('token') || localStorage.getItem('accessToken');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -170,42 +173,44 @@ export default function PostView() {
       setLoading(true);
 
       try {
-       const [postRes, commentsRes] = await Promise.all([
-        fetch(`${API_BASE}/posts/${id}`),
-        fetch(`${API_BASE}/posts/${id}/comments`)
-       ]);
+        const headers = getAuthHeaders();
+        const [postRes, commentsRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/posts/${id}`, { headers }),
+          fetch(`${API_BASE_URL}/api/posts/${id}/comments`, { headers })
+        ]);
 
-       if (!postRes.ok) throw new Error('Post not found');
+        if (!postRes.ok) throw new Error('Post not found');
 
-       const postData = await postRes.json();
-       const commentsData = await commentsRes.json();
+        const postData = await postRes.json();
+        const commentsData = await commentsRes.json();
 
-  if (isMounted) {
-    setPost({
-      ...postData,
-      author: {
-        user_id: postData.author_id,
-        username: postData.username,
-        display_name: postData.display_name,
-        bio: postData.bio
-      },
-      user_has_liked: postData.is_liked,
-      is_saved: postData.is_bookmarked
-    });
+        if (isMounted) {
+          setPost({
+            ...postData,
+            author: {
+              user_id: postData.author_id,
+              username: postData.username,
+              display_name: postData.display_name,
+              bio: postData.bio
+            },
+            user_has_liked: Boolean(postData.is_liked),
+            is_saved: Boolean(postData.is_saved || postData.is_bookmarked)
+          });
+          setIsFollowing(Boolean(postData.is_following_author));
 
-    if (Array.isArray(commentsData)) {
-      setComments(commentsData);
-    }
-  }
-} catch (err) {
-  if (isMounted) {
-    console.error('Error loading post or comments:', err);
-  }
-} finally { // <-- FIXED HERE
-  if (isMounted) {
-    setLoading(false);
-  }
-}
+          if (Array.isArray(commentsData)) {
+            setComments(commentsData);
+          }
+        }
+      } catch (err) {
+        if (isMounted) {
+          console.error('Error loading post or comments:', err);
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
     };
 
     loadData();
@@ -217,7 +222,9 @@ export default function PostView() {
 
   const fetchComments = async () => {
     try {
-      const res = await fetch(`${API_BASE}/posts/${id}/comments`);
+      const res = await fetch(`${API_BASE_URL}/api/posts/${id}/comments`, {
+        headers: getAuthHeaders(),
+      });
       const data = await res.json();
       if (Array.isArray(data)) setComments(data);
     } catch (err) {
@@ -228,12 +235,9 @@ export default function PostView() {
   const handleLike = async () => {
     if (!post) return;
     try {
-      const token = localStorage.getItem('token') || localStorage.getItem('accessToken');
-      const res = await fetch(`${API_BASE}/posts/${post.post_id}/like`, {
+      const res = await fetch(`${API_BASE_URL}/api/posts/${post.post_id}/like`, {
         method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: getAuthHeaders(),
       });
       if (res.ok) {
         setPost((prev) =>
@@ -254,18 +258,31 @@ export default function PostView() {
   const handleBookmark = async () => {
     if (!post) return;
     try {
-      const token = localStorage.getItem('token') || localStorage.getItem('accessToken');
-      const res = await fetch(`${API_BASE}/posts/${post.post_id}/bookmark`, {
+      const res = await fetch(`${API_BASE_URL}/api/posts/${post.post_id}/save`, {
         method: 'POST',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: getAuthHeaders(),
       });
       if (res.ok) {
         setPost((prev) => (prev ? { ...prev, is_saved: !prev.is_saved } : null));
       }
     } catch (err) {
       console.error('Failed to toggle bookmark:', err);
+    }
+  };
+
+  const handleFollowAuthor = async () => {
+    if (!post?.author?.user_id) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/users/${post.author.user_id}/follow`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIsFollowing(data.isFollowing);
+      }
+    } catch (err) {
+      console.error('Failed to follow author:', err);
     }
   };
 
@@ -278,32 +295,34 @@ export default function PostView() {
   const handleDeleteComment = async (commentId: number) => {
     const previousComments = [...comments];
 
-    const getDescendantIds = (targetId: number, list: Comment[]): number[] => {
-      const children = list.filter(
-        (c) => Number(c.parent_id ?? c.parent_comment_id) === Number(targetId)
-      );
-      return children.reduce(
-        (acc, child) => [...acc, child.comment_id, ...getDescendantIds(child.comment_id, list)],
-        [] as number[]
-      );
-    };
+    // Iterative collection to avoid missing deeply nested children
+    const idsToRemove = new Set<number>([commentId]);
+    let addedNew = true;
 
-    const idsToRemove = new Set([commentId, ...getDescendantIds(commentId, comments)]);
+    while (addedNew) {
+      addedNew = false;
+      comments.forEach((c) => {
+        const pId = Number(c.parent_id ?? c.parent_comment_id);
+        if (pId && idsToRemove.has(pId) && !idsToRemove.has(c.comment_id)) {
+          idsToRemove.add(c.comment_id);
+          addedNew = true;
+        }
+      });
+    }
+
     setComments((prev) => prev.filter((c) => !idsToRemove.has(c.comment_id)));
 
     try {
-      const token = localStorage.getItem('token') || localStorage.getItem('accessToken');
-      const res = await fetch(`${API_BASE}/comments/${commentId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/comments/${commentId}`, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...getAuthHeaders(),
         },
       });
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        console.error(`Failed to delete comment (${res.status}):`, errorData.message || res.statusText);
         setComments(previousComments);
         alert(errorData.message || `Could not delete comment (Status ${res.status})`);
       }
@@ -323,12 +342,11 @@ export default function PostView() {
     const parentId = replyTo ? replyTo.id : null;
 
     try {
-      const token = localStorage.getItem('token') || localStorage.getItem('accessToken');
-      const res = await fetch(`${API_BASE}/posts/${id}/comments`, {
+      const res = await fetch(`${API_BASE_URL}/api/posts/${id}/comments`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...getAuthHeaders(),
         },
         body: JSON.stringify({
           content: commentText,
@@ -387,7 +405,7 @@ export default function PostView() {
   }
 
   const authorName = post.author?.display_name || post.author?.username || 'Anonymous Author';
-  const authorBio = post.author?.bio || 'Long-form writer & web developer';
+  const authorBio = post.author?.bio || 'Author on JamBlog.';
   const postContent = post.content || '';
   const commentTree = buildCommentTree(comments);
 
@@ -408,7 +426,7 @@ export default function PostView() {
             }`}
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Back to Feed</span>
+            <span>Back</span>
           </button>
 
           <button
@@ -436,7 +454,12 @@ export default function PostView() {
             isDark ? 'border-white/10 text-slate-400' : 'border-slate-200 text-slate-500'
           }`}>
             <div className="flex items-center gap-2">
-              <span className={`font-medium ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>{authorName}</span>
+              <Link 
+                to={`/author/${post.author?.username}`} 
+                className={`font-medium hover:text-orange-500 transition ${isDark ? 'text-slate-200' : 'text-slate-800'}`}
+              >
+                {authorName}
+              </Link>
               <span>•</span>
               <span>
                 {post.created_at ? new Date(post.created_at).toLocaleDateString(undefined, { month: '2-digit', day: '2-digit', year: 'numeric' }) : ''}
@@ -460,7 +483,7 @@ export default function PostView() {
                 }`}
               >
                 <Bookmark className={`w-4 h-4 ${post.is_saved ? 'fill-amber-500 text-amber-500' : ''}`} />
-                <span>Save</span>
+                <span>{post.is_saved ? 'Saved' : 'Save'}</span>
               </button>
             </div>
           </div>
@@ -482,12 +505,21 @@ export default function PostView() {
             : 'bg-white border-slate-200 text-slate-900'
         }`}>
           <div>
-            <h4 className={`font-serif text-lg font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{authorName}</h4>
+            <h4 className={`font-serif text-lg font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
+              <Link to={`/author/${post.author?.username}`} className="hover:text-orange-500 transition">
+                {authorName}
+              </Link>
+            </h4>
             <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{authorBio}</p>
           </div>
-          <button className="flex items-center gap-2 px-5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-full text-xs font-semibold transition">
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>Follow</span>
+          <button 
+            onClick={handleFollowAuthor}
+            className={`flex items-center gap-2 px-5 py-2 text-white rounded-full text-xs font-semibold transition ${
+              isFollowing ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-orange-600 hover:bg-orange-700'
+            }`}
+          >
+            {isFollowing ? <UserCheck className="w-3.5 h-3.5" /> : <UserPlus className="w-3.5 h-3.5" />}
+            <span>{isFollowing ? 'Following' : 'Follow'}</span>
           </button>
         </div>
 

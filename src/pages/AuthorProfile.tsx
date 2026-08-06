@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { UserPlus, UserCheck, MapPin, BookOpen, Users } from 'lucide-react';
 import FollowingModal from '../components/FollowingModal';
+import API from '../api/axios';
 
 interface Profile {
   user_id: number;
@@ -34,9 +35,12 @@ export default function AuthorProfile() {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
-    fetch(`http://localhost:5000/api/users/${username}`)
-      .then((res) => res.json())
-      .then((data) => {
+    const controller = new AbortController();
+    setLoading(true);
+
+    API.get(`/users/${username}`, { signal: controller.signal })
+      .then((res) => {
+        const data = res.data;
         if (data.profile) {
           setProfile(data.profile);
           setIsFollowing(data.profile.is_following);
@@ -46,19 +50,22 @@ export default function AuthorProfile() {
         setLoading(false);
       })
       .catch((err) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
         console.error('Error loading author profile:', err);
         setLoading(false);
       });
+
+    return () => {
+      controller.abort();
+    };
   }, [username]);
 
   const handleToggleFollow = async () => {
     if (!profile) return;
 
     try {
-      const res = await fetch(`http://localhost:5000/api/users/${profile.user_id}/follow`, {
-        method: 'POST',
-      });
-      const data = await res.json();
+      const res = await API.post(`/users/${profile.user_id}/follow`);
+      const data = res.data;
 
       setIsFollowing(data.isFollowing);
       setFollowersCount((prev) => (data.isFollowing ? prev + 1 : prev - 1));
@@ -190,7 +197,11 @@ export default function AuthorProfile() {
       </div>
 
       {/* Following Modal */}
-      <FollowingModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+      <FollowingModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        userId={profile.user_id}
+      />
     </div>
   );
 }

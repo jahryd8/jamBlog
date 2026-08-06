@@ -15,7 +15,8 @@ import {
   CheckCircle2,
   Info,
   FileEdit,
-  Globe
+  Globe,
+  AlertCircle
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
@@ -25,6 +26,7 @@ interface MyPost {
   title: string;
   excerpt: string;
   is_private: boolean;
+  is_draft?: boolean;
   created_at: string;
   likes_count?: string | number;
   comments_count?: string | number;
@@ -44,55 +46,53 @@ export default function Dashboard() {
   const location = useLocation();
   const isDark = theme === 'dark';
 
-  // Toast / Feedback banner state passed via react-router-dom
-  const [toastMessage, setToastMessage] = useState<string | null>(
-    location.state?.message || null
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(
+    location.state?.message ? { message: location.state.message, type: 'success' } : null
   );
 
-  // State
   const [myPosts, setMyPosts] = useState<MyPost[]>([]);
   const [savedPosts, setSavedPosts] = useState<SavedPost[]>([]);
   const [totalLikes, setTotalLikes] = useState<number>(0);
   const [totalLikesGiven, setTotalLikesGiven] = useState<number>(0);
   const [loading, setLoading] = useState(true);
 
-  // Tabs: 'published' | 'drafts' | 'bookmarks'
   const [activeTab, setActiveTab] = useState<'published' | 'drafts' | 'bookmarks'>('published');
-
-  // Track which post ID is currently confirming deletion
   const [deletingPostId, setDeletingPostId] = useState<number | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     fetchDashboardData();
   }, []);
 
-  // Auto-dismiss feedback message after 4 seconds
   useEffect(() => {
-    if (toastMessage) {
-      const timer = setTimeout(() => setToastMessage(null), 4000);
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 4000);
       return () => clearTimeout(timer);
     }
-  }, [toastMessage]);
+  }, [toast]);
 
-  const fetchDashboardData = async () => {
-    setLoading(true);
+  const getAuthHeaders = () => {
     const token = localStorage.getItem('token');
-    const headers = {
+    return {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     };
+  };
+
+  const fetchDashboardData = async () => {
+    setLoading(true);
+    const headers = getAuthHeaders();
 
     try {
-      // 1. Fetch User's Own Posts
-      const postsRes = await fetch(`${API_BASE}/posts/my-posts`, { headers });
+      const [postsRes, statsRes] = await Promise.all([
+        fetch(`${API_BASE}/posts/my-posts`, { headers }),
+        fetch(`${API_BASE}/dashboard/stats`, { headers })
+      ]);
+
       if (postsRes.ok) {
         const postsData = await postsRes.json();
         if (Array.isArray(postsData)) setMyPosts(postsData);
       }
 
-      // 2. Fetch Dashboard Stats
-      const statsRes = await fetch(`${API_BASE}/dashboard/stats`, { headers });
       if (statsRes.ok) {
         const statsData = await statsRes.json();
         setTotalLikes(statsData.totalLikesReceived || 0);
@@ -101,69 +101,97 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error('Error fetching dashboard data:', err);
+      setToast({ message: 'Failed to load dashboard data.', type: 'error' });
     } finally {
       setLoading(false);
     }
   };
 
-  // Toggle Visibility / Publish Draft
+  // Optimistic Toggle Private/Public
   const handleTogglePrivate = async (postId: number, currentPrivateStatus: boolean) => {
+    const previousPosts = [...myPosts];
+    const nextPrivateStatus = !currentPrivateStatus;
+
+    setMyPosts((prev) =>
+      prev.map((post) =>
+        post.post_id === postId ? { ...post, is_private: nextPrivateStatus } : post
+      )
+    );
+
+    setToast({
+      message: currentPrivateStatus ? 'Draft published to feed!' : 'Essay moved to private drafts.',
+      type: 'success'
+    });
+
     try {
-      const token = localStorage.getItem('token');
       const res = await fetch(`${API_BASE}/posts/${postId}/visibility`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ is_private: !currentPrivateStatus }),
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ is_private: nextPrivateStatus }),
       });
 
-      if (res.ok) {
-        setMyPosts((prev) =>
-          prev.map((post) =>
-            post.post_id === postId ? { ...post, is_private: !currentPrivateStatus } : post
-          )
-        );
-        setToastMessage(currentPrivateStatus ? 'Draft published to feed!' : 'Essay moved to private drafts.');
-      }
+      if (!res.ok) throw new Error('Failed to update visibility');
     } catch (err) {
       console.error('Failed to toggle post visibility:', err);
+      setMyPosts(previousPosts);
+      setToast({ message: 'Could not update visibility. Changes reverted.', type: 'error' });
     }
   };
 
-  // Inline Delete Post
+  // Optimistic Delete Post
   const confirmDeletePost = async (postId: number) => {
-    setIsDeleting(true);
+    const previousPosts = [...myPosts];
+
+    setMyPosts((prev) => prev.filter((post) => post.post_id !== postId));
+    setDeletingPostId(null);
+    setToast({ message: 'Essay deleted successfully.', type: 'info' });
+
     try {
-      const token = localStorage.getItem('token');
       const res = await fetch(`${API_BASE}/posts/${postId}`, {
         method: 'DELETE',
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        }
+        headers: getAuthHeaders(),
       });
 
-      if (res.ok) {
-        setMyPosts((prev) => prev.filter((post) => post.post_id !== postId));
-        setDeletingPostId(null);
-        setToastMessage('Essay deleted successfully.');
-      }
+      if (!res.ok) throw new Error('Failed deletion');
     } catch (err) {
       console.error('Failed to delete post:', err);
-    } finally {
-      setIsDeleting(false);
+      setMyPosts(previousPosts);
+      setToast({ message: 'Failed to delete essay. Post restored.', type: 'error' });
     }
   };
 
-  // Filtered post arrays
-  const publishedPosts = myPosts.filter((post) => !post.is_private);
-  const draftPosts = myPosts.filter((post) => post.is_private);
+  // Optimistic Unbookmark
+  const handleUnbookmark = async (postId: number) => {
+    const previousBookmarks = [...savedPosts];
+
+    setSavedPosts((prev) => prev.filter((post) => post.post_id !== postId));
+    setToast({ message: 'Bookmark removed.', type: 'info' });
+
+    try {
+      const res = await fetch(`${API_BASE}/posts/${postId}/bookmark`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+
+      if (!res.ok) throw new Error('Failed unbookmark');
+    } catch (err) {
+      console.error('Failed to remove bookmark:', err);
+      setSavedPosts(previousBookmarks);
+      setToast({ message: 'Could not remove bookmark. Restored to saved.', type: 'error' });
+    }
+  };
+
+  const publishedPosts = myPosts.filter((post) => !post.is_private && !post.is_draft);
+  const draftPosts = myPosts.filter((post) => post.is_private || post.is_draft);
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return 'N/A';
     const parsed = new Date(dateStr);
-    return isNaN(parsed.getTime()) ? 'N/A' : parsed.toLocaleDateString();
+    return isNaN(parsed.getTime()) ? 'N/A' : parsed.toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
   };
 
   return (
@@ -173,22 +201,26 @@ export default function Dashboard() {
       <div className="max-w-5xl mx-auto px-4 py-8 space-y-8">
         
         {/* Toast Feedback Notification Banner */}
-        {toastMessage && (
+        {toast && (
           <div className={`p-4 rounded-2xl text-xs font-bold flex items-center justify-between border transition-all animate-fade-in ${
-            toastMessage.toLowerCase().includes('cancel') || toastMessage.toLowerCase().includes('moved')
+            toast.type === 'error'
+              ? 'bg-rose-500/10 text-rose-600 border-rose-500/20'
+              : toast.type === 'info'
               ? 'bg-amber-500/10 text-amber-600 border-amber-500/20'
               : 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
           }`}>
             <div className="flex items-center gap-2">
-              {toastMessage.toLowerCase().includes('cancel') ? (
+              {toast.type === 'error' ? (
+                <AlertCircle className="w-4 h-4" />
+              ) : toast.type === 'info' ? (
                 <Info className="w-4 h-4" />
               ) : (
                 <CheckCircle2 className="w-4 h-4" />
               )}
-              <span>{toastMessage}</span>
+              <span>{toast.message}</span>
             </div>
             <button 
-              onClick={() => setToastMessage(null)}
+              onClick={() => setToast(null)}
               className="p-1 rounded-lg hover:bg-current/10 transition"
             >
               <X className="w-3.5 h-3.5" />
@@ -196,7 +228,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Top Banner */}
+        {/* Header Banner */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h1 className={`font-serif text-3xl sm:text-4xl font-bold ${
@@ -232,287 +264,121 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Overview Stat Cards (5 Cards - Balanced on Desktop) */}
+        {/* Overview Stat Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-          
-          {/* 1. Published Essays */}
-          <div
+          <StatCard
+            icon={<Globe className="w-5 h-5" />}
+            color="orange"
+            label="Published"
+            value={publishedPosts.length}
+            loading={loading}
+            active={activeTab === 'published'}
             onClick={() => setActiveTab('published')}
-            className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition ${
-              activeTab === 'published' ? 'ring-2 ring-orange-500/50' : ''
-            } ${
-              isDark 
-                ? 'bg-[#1E1E1E] border-white/10 text-white hover:border-white/30' 
-                : 'bg-white border-slate-200 text-slate-900 hover:border-slate-400 shadow-sm'
-            }`}
-          >
-            <div className="p-3 rounded-2xl bg-orange-500/10 text-orange-500">
-              <Globe className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold font-serif">{loading ? '...' : publishedPosts.length}</div>
-              <div className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Published</div>
-            </div>
-          </div>
-
-          {/* 2. Private Drafts */}
-          <div
+            isDark={isDark}
+          />
+          <StatCard
+            icon={<FileEdit className="w-5 h-5" />}
+            color="amber"
+            label="Drafts"
+            value={draftPosts.length}
+            loading={loading}
+            active={activeTab === 'drafts'}
             onClick={() => setActiveTab('drafts')}
-            className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition ${
-              activeTab === 'drafts' ? 'ring-2 ring-amber-500/50' : ''
-            } ${
-              isDark 
-                ? 'bg-[#1E1E1E] border-white/10 text-white hover:border-white/30' 
-                : 'bg-white border-slate-200 text-slate-900 hover:border-slate-400 shadow-sm'
-            }`}
-          >
-            <div className="p-3 rounded-2xl bg-amber-500/10 text-amber-500">
-              <FileEdit className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold font-serif">{loading ? '...' : draftPosts.length}</div>
-              <div className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Drafts</div>
-            </div>
-          </div>
-
-          {/* 3. Likes Received */}
-          <div
-            className={`p-5 rounded-3xl border flex items-center gap-4 transition ${
-              isDark 
-                ? 'bg-[#1E1E1E] border-white/10 text-white' 
-                : 'bg-white border-slate-200 text-slate-900 shadow-sm'
-            }`}
-          >
-            <div className="p-3 rounded-2xl bg-rose-500/10 text-rose-500">
-              <Heart className="w-5 h-5 fill-current" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold font-serif">{loading ? '...' : totalLikes}</div>
-              <div className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Likes</div>
-            </div>
-          </div>
-
-          {/* 4. Likes Given */}
-          <div 
-            className={`p-5 rounded-3xl border flex items-center gap-4 transition ${
-              isDark 
-                ? 'bg-[#1E1E1E] border-white/10 text-white' 
-                : 'bg-white border-slate-200 text-slate-900 shadow-sm'
-            }`}
-          >
-            <div className="p-3 rounded-2xl bg-purple-500/10 text-purple-500">
-              <Heart className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold font-serif">{loading ? '...' : totalLikesGiven}</div>
-              <div className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Likes Given</div>
-            </div>
-          </div>
-
-          {/* 5. Bookmarks */}
-          <div
+            isDark={isDark}
+          />
+          <StatCard
+            icon={<Heart className="w-5 h-5 fill-current" />}
+            color="rose"
+            label="Likes"
+            value={totalLikes}
+            loading={loading}
+            isDark={isDark}
+          />
+          <StatCard
+            icon={<Heart className="w-5 h-5" />}
+            color="purple"
+            label="Likes Given"
+            value={totalLikesGiven}
+            loading={loading}
+            isDark={isDark}
+          />
+          <StatCard
+            icon={<Bookmark className="w-5 h-5 fill-current" />}
+            color="sky"
+            label="Bookmarks"
+            value={savedPosts.length}
+            loading={loading}
+            active={activeTab === 'bookmarks'}
             onClick={() => setActiveTab('bookmarks')}
-            className={`p-5 rounded-3xl border flex items-center gap-4 cursor-pointer transition ${
-              activeTab === 'bookmarks' ? 'ring-2 ring-sky-500/50' : ''
-            } ${
-              isDark 
-                ? 'bg-[#1E1E1E] border-white/10 text-white hover:border-white/30' 
-                : 'bg-white border-slate-200 text-slate-900 hover:border-slate-400 shadow-sm'
-            }`}
-          >
-            <div className="p-3 rounded-2xl bg-sky-500/10 text-sky-500">
-              <Bookmark className="w-5 h-5 fill-current" />
-            </div>
-            <div>
-              <div className="text-2xl font-bold font-serif">{loading ? '...' : savedPosts.length}</div>
-              <div className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Bookmarks</div>
-            </div>
-          </div>
-
+            isDark={isDark}
+          />
         </div>
 
-        {/* Tabs Header */}
+        {/* Tabs Navigation */}
         <div className={`flex border-b gap-6 text-sm font-semibold ${
           isDark ? 'border-white/10' : 'border-slate-200'
         }`}>
-          <button
+          <TabButton
+            label="Published Essays"
+            count={publishedPosts.length}
+            active={activeTab === 'published'}
             onClick={() => setActiveTab('published')}
-            className={`pb-3 transition relative flex items-center gap-2 ${
-              activeTab === 'published'
-                ? 'text-orange-600 border-b-2 border-orange-600'
-                : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <span>Published Essays</span>
-            <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono ${
-              isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-200 text-slate-700'
-            }`}>
-              {publishedPosts.length}
-            </span>
-          </button>
-
-          <button
+            activeColor="text-orange-600 border-orange-600"
+            isDark={isDark}
+            loading={loading}
+          />
+          <TabButton
+            label="Drafts"
+            count={draftPosts.length}
+            active={activeTab === 'drafts'}
             onClick={() => setActiveTab('drafts')}
-            className={`pb-3 transition relative flex items-center gap-2 ${
-              activeTab === 'drafts'
-                ? 'text-amber-500 border-b-2 border-amber-500'
-                : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <span>Drafts</span>
-            <span className="px-2 py-0.5 text-[10px] rounded-full bg-amber-500/20 text-amber-500 font-mono">
-              {draftPosts.length}
-            </span>
-          </button>
-
-          <button
+            activeColor="text-amber-500 border-amber-500"
+            badgeBg="bg-amber-500/20 text-amber-500"
+            isDark={isDark}
+            loading={loading}
+          />
+          <TabButton
+            label="Bookmarks"
+            count={savedPosts.length}
+            active={activeTab === 'bookmarks'}
             onClick={() => setActiveTab('bookmarks')}
-            className={`pb-3 transition relative flex items-center gap-2 ${
-              activeTab === 'bookmarks'
-                ? 'text-orange-600 border-b-2 border-orange-600'
-                : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <span>Bookmarks</span>
-            <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono ${
-              isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-200 text-slate-700'
-            }`}>
-              {savedPosts.length}
-            </span>
-          </button>
+            activeColor="text-orange-600 border-orange-600"
+            isDark={isDark}
+            loading={loading}
+          />
         </div>
 
         {/* Tab 1: Published Essays */}
         {activeTab === 'published' && (
           <section className="space-y-4">
             {loading ? (
-              <p className={`text-xs text-center py-8 font-serif ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                Loading essays...
-              </p>
-            ) : publishedPosts.length === 0 ? (
-              <div className={`p-10 text-center rounded-3xl border space-y-3 ${
-                isDark ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-slate-200 shadow-sm'
-              }`}>
-                <Globe className="w-8 h-8 mx-auto text-orange-500 opacity-60" />
-                <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  You haven't published any essays publicly yet.
-                </p>
-                <Link
-                  to="/create"
-                  className="inline-block px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-full text-xs font-bold transition"
-                >
-                  Write an Essay
-                </Link>
+              <div className="space-y-4">
+                <PostCardSkeleton isDark={isDark} />
+                <PostCardSkeleton isDark={isDark} />
+                <PostCardSkeleton isDark={isDark} />
               </div>
+            ) : publishedPosts.length === 0 ? (
+              <EmptyState
+                icon={<Globe className="w-8 h-8 mx-auto text-orange-500 opacity-60" />}
+                message="You haven't published any essays publicly yet."
+                actionLabel="Write an Essay"
+                actionTo="/create"
+                isDark={isDark}
+              />
             ) : (
               <div className="space-y-4">
                 {publishedPosts.map((post) => (
-                  <article
+                  <PostCard
                     key={post.post_id}
-                    className={`p-6 rounded-3xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                      isDark 
-                        ? 'bg-[#1E1E1E] border-white/10 text-white' 
-                        : 'bg-white border-slate-200 text-slate-900 shadow-sm'
-                    }`}
-                  >
-                    <div className="space-y-2 max-w-xl">
-                      <div className="flex items-center gap-2 text-[10px]">
-                        <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>
-                          {formatDate(post.created_at)}
-                        </span>
-                        <span className={isDark ? 'text-slate-600' : 'text-slate-300'}>•</span>
-                        <span className="px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                          Published
-                        </span>
-                      </div>
-
-                      <h3 className="font-serif text-lg font-bold">
-                        <Link 
-                          to={`/post/${post.post_id}`} 
-                          className={`transition ${isDark ? 'hover:text-orange-400' : 'hover:text-orange-600'}`}
-                        >
-                          {post.title}
-                        </Link>
-                      </h3>
-
-                      <p className={`text-xs line-clamp-2 leading-relaxed ${
-                        isDark ? 'text-slate-400' : 'text-slate-600'
-                      }`}>
-                        {post.excerpt}
-                      </p>
-
-                      <div className={`flex items-center gap-4 pt-1 text-xs ${
-                        isDark ? 'text-slate-400' : 'text-slate-500'
-                      }`}>
-                        <span className="flex items-center gap-1">
-                          <Heart className="w-3.5 h-3.5" />
-                          {post.likes_count || 0}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          {post.comments_count || 0}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Actions */}
-                    <div className={`flex items-center gap-2 pt-2 sm:pt-0 border-t sm:border-0 ${
-                      isDark ? 'border-white/10' : 'border-slate-100'
-                    }`}>
-                      {deletingPostId === post.post_id ? (
-                        <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 p-1.5 rounded-2xl animate-fade-in">
-                          <span className="text-[11px] font-semibold text-rose-500 px-2">Delete?</span>
-                          <button
-                            disabled={isDeleting}
-                            onClick={() => confirmDeletePost(post.post_id)}
-                            className="px-3 py-1 bg-rose-500 text-white rounded-xl text-xs font-bold hover:bg-rose-600 transition disabled:opacity-50"
-                          >
-                            {isDeleting ? 'Deleting...' : 'Confirm'}
-                          </button>
-                          <button
-                            onClick={() => setDeletingPostId(null)}
-                            className={`p-1 rounded-xl text-xs transition ${
-                              isDark ? 'hover:bg-white/10 text-slate-300' : 'hover:bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => handleTogglePrivate(post.post_id, post.is_private)}
-                            title="Unpublish to Drafts"
-                            className={`p-2 rounded-xl border text-xs transition ${
-                              isDark ? 'border-white/10 hover:bg-white/10' : 'border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            <EyeOff className="w-4 h-4 text-amber-500" />
-                          </button>
-
-                          <Link
-                            to={`/edit/${post.post_id}`}
-                            title="Edit Essay"
-                            className={`p-2 rounded-xl border text-xs transition ${
-                              isDark 
-                                ? 'border-white/10 hover:bg-white/10 text-slate-200' 
-                                : 'border-slate-200 hover:bg-slate-100 text-slate-700'
-                            }`}
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </Link>
-
-                          <button
-                            onClick={() => setDeletingPostId(post.post_id)}
-                            title="Delete Essay"
-                            className="p-2 rounded-xl border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition text-xs"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </article>
+                    post={post}
+                    isDark={isDark}
+                    deletingPostId={deletingPostId}
+                    onDeleteConfirm={confirmDeletePost}
+                    onDeleteCancel={() => setDeletingPostId(null)}
+                    onDeleteInit={(id) => setDeletingPostId(id)}
+                    onTogglePrivate={handleTogglePrivate}
+                    formatDate={formatDate}
+                  />
                 ))}
               </div>
             )}
@@ -523,119 +389,33 @@ export default function Dashboard() {
         {activeTab === 'drafts' && (
           <section className="space-y-4">
             {loading ? (
-              <p className={`text-xs text-center py-8 font-serif ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                Loading drafts...
-              </p>
-            ) : draftPosts.length === 0 ? (
-              <div className={`p-10 text-center rounded-3xl border space-y-3 ${
-                isDark ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-slate-200 shadow-sm'
-              }`}>
-                <FileEdit className="w-8 h-8 mx-auto text-amber-500 opacity-60" />
-                <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  No drafts found. Thoughts you save as private drafts will show up here.
-                </p>
-                <Link
-                  to="/create"
-                  className="inline-block px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-full text-xs font-bold transition"
-                >
-                  Start a New Draft
-                </Link>
+              <div className="space-y-4">
+                <PostCardSkeleton isDark={isDark} />
+                <PostCardSkeleton isDark={isDark} />
               </div>
+            ) : draftPosts.length === 0 ? (
+              <EmptyState
+                icon={<FileEdit className="w-8 h-8 mx-auto text-amber-500 opacity-60" />}
+                message="No drafts found. Thoughts you save as private drafts will show up here."
+                actionLabel="Start a New Draft"
+                actionTo="/create"
+                isDark={isDark}
+              />
             ) : (
               <div className="space-y-4">
                 {draftPosts.map((post) => (
-                  <article
+                  <PostCard
                     key={post.post_id}
-                    className={`p-6 rounded-3xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
-                      isDark 
-                        ? 'bg-[#1E1E1E] border-white/10 text-white' 
-                        : 'bg-white border-slate-200 text-slate-900 shadow-sm'
-                    }`}
-                  >
-                    <div className="space-y-2 max-w-xl">
-                      <div className="flex items-center gap-2 text-[10px]">
-                        <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>
-                          Saved {formatDate(post.created_at)}
-                        </span>
-                        <span className={isDark ? 'text-slate-600' : 'text-slate-300'}>•</span>
-                        <span className="px-2 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                          Private Draft
-                        </span>
-                      </div>
-
-                      <h3 className="font-serif text-lg font-bold">
-                        <Link 
-                          to={`/edit/${post.post_id}`} 
-                          className="hover:text-amber-500 transition"
-                        >
-                          {post.title || 'Untitled Draft'}
-                        </Link>
-                      </h3>
-
-                      <p className={`text-xs line-clamp-2 leading-relaxed ${
-                        isDark ? 'text-slate-400' : 'text-slate-600'
-                      }`}>
-                        {post.excerpt || 'No summary excerpt added yet.'}
-                      </p>
-                    </div>
-
-                    {/* Draft Actions */}
-                    <div className={`flex items-center gap-2 pt-2 sm:pt-0 border-t sm:border-0 ${
-                      isDark ? 'border-white/10' : 'border-slate-100'
-                    }`}>
-                      {deletingPostId === post.post_id ? (
-                        <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 p-1.5 rounded-2xl animate-fade-in">
-                          <span className="text-[11px] font-semibold text-rose-500 px-2">Delete?</span>
-                          <button
-                            disabled={isDeleting}
-                            onClick={() => confirmDeletePost(post.post_id)}
-                            className="px-3 py-1 bg-rose-500 text-white rounded-xl text-xs font-bold hover:bg-rose-600 transition disabled:opacity-50"
-                          >
-                            {isDeleting ? 'Deleting...' : 'Confirm'}
-                          </button>
-                          <button
-                            onClick={() => setDeletingPostId(null)}
-                            className={`p-1 rounded-xl text-xs transition ${
-                              isDark ? 'hover:bg-white/10 text-slate-300' : 'hover:bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => handleTogglePrivate(post.post_id, post.is_private)}
-                            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-xl text-xs font-bold transition"
-                            title="Publish directly to public feed"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            <span>Publish</span>
-                          </button>
-
-                          <Link
-                            to={`/edit/${post.post_id}`}
-                            title="Continue Editing"
-                            className={`p-2 rounded-xl border text-xs transition ${
-                              isDark 
-                                ? 'border-white/10 hover:bg-white/10 text-slate-200' 
-                                : 'border-slate-200 hover:bg-slate-100 text-slate-700'
-                            }`}
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </Link>
-
-                          <button
-                            onClick={() => setDeletingPostId(post.post_id)}
-                            title="Delete Draft"
-                            className="p-2 rounded-xl border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition text-xs"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </article>
+                    post={post}
+                    isDraft
+                    isDark={isDark}
+                    deletingPostId={deletingPostId}
+                    onDeleteConfirm={confirmDeletePost}
+                    onDeleteCancel={() => setDeletingPostId(null)}
+                    onDeleteInit={(id) => setDeletingPostId(id)}
+                    onTogglePrivate={handleTogglePrivate}
+                    formatDate={formatDate}
+                  />
                 ))}
               </div>
             )}
@@ -645,34 +425,47 @@ export default function Dashboard() {
         {/* Tab 3: Saved Bookmarks */}
         {activeTab === 'bookmarks' && (
           <section className="space-y-4">
-            {savedPosts.length === 0 ? (
-              <div className={`p-10 text-center rounded-3xl border ${
-                isDark ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-slate-200 shadow-sm'
-              }`}>
-                <Bookmark className="w-8 h-8 mx-auto text-sky-500 opacity-60 mb-2" />
-                <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  You haven't saved any essays yet! Bookmark posts from the feed to read them later.
-                </p>
+            {loading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <BookmarkSkeleton isDark={isDark} />
+                <BookmarkSkeleton isDark={isDark} />
+                <BookmarkSkeleton isDark={isDark} />
+                <BookmarkSkeleton isDark={isDark} />
               </div>
+            ) : savedPosts.length === 0 ? (
+              <EmptyState
+                icon={<Bookmark className="w-8 h-8 mx-auto text-sky-500 opacity-60" />}
+                message="You haven't saved any essays yet! Bookmark posts from the feed to read them later."
+                isDark={isDark}
+              />
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {savedPosts.map((post) => (
                   <article
                     key={post.post_id}
-                    className={`p-6 rounded-3xl border transition shadow-sm space-y-3 ${
+                    className={`p-6 rounded-3xl border transition shadow-sm space-y-3 relative group ${
                       isDark 
                         ? 'bg-[#1E1E1E] border-white/10 text-white' 
                         : 'bg-white border-slate-200 text-slate-900'
                     }`}
                   >
-                    <div className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      By{' '}
-                      <Link 
-                        to={`/author/${post.username}`} 
-                        className="hover:text-orange-600 font-semibold text-slate-800 dark:text-slate-200"
+                    <div className="flex justify-between items-start">
+                      <div className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        By{' '}
+                        <Link 
+                          to={`/author/${post.username}`} 
+                          className="hover:text-orange-600 font-semibold text-slate-800 dark:text-slate-200"
+                        >
+                          {post.display_name || post.username}
+                        </Link>
+                      </div>
+                      <button
+                        onClick={() => handleUnbookmark(post.post_id)}
+                        title="Remove Bookmark"
+                        className="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition"
                       >
-                        {post.display_name || post.username}
-                      </Link>
+                        <Bookmark className="w-4 h-4 fill-current" />
+                      </button>
                     </div>
 
                     <h3 className="font-serif text-lg font-bold">
@@ -703,6 +496,344 @@ export default function Dashboard() {
         )}
 
       </div>
+    </div>
+  );
+}
+
+// Skeleton Components
+function PostCardSkeleton({ isDark }: { isDark: boolean }) {
+  const skeletonBg = isDark ? 'bg-white/10' : 'bg-slate-200';
+
+  return (
+    <div
+      className={`p-6 rounded-3xl border animate-pulse flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+        isDark ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-slate-200'
+      }`}
+    >
+      <div className="space-y-3 w-full max-w-xl">
+        <div className="flex items-center gap-2">
+          <div className={`h-3 w-20 rounded-full ${skeletonBg}`} />
+          <div className={`h-3 w-16 rounded-full ${skeletonBg}`} />
+        </div>
+        <div className={`h-5 w-3/4 rounded-lg ${skeletonBg}`} />
+        <div className="space-y-1.5">
+          <div className={`h-3 w-full rounded-md ${skeletonBg}`} />
+          <div className={`h-3 w-4/5 rounded-md ${skeletonBg}`} />
+        </div>
+        <div className="flex gap-4 pt-1">
+          <div className={`h-3 w-10 rounded-md ${skeletonBg}`} />
+          <div className={`h-3 w-10 rounded-md ${skeletonBg}`} />
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 pt-2 sm:pt-0">
+        <div className={`h-8 w-8 rounded-xl ${skeletonBg}`} />
+        <div className={`h-8 w-8 rounded-xl ${skeletonBg}`} />
+        <div className={`h-8 w-8 rounded-xl ${skeletonBg}`} />
+      </div>
+    </div>
+  );
+}
+
+function BookmarkSkeleton({ isDark }: { isDark: boolean }) {
+  const skeletonBg = isDark ? 'bg-white/10' : 'bg-slate-200';
+
+  return (
+    <div
+      className={`p-6 rounded-3xl border animate-pulse space-y-3 ${
+        isDark ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-slate-200'
+      }`}
+    >
+      <div className="flex justify-between items-center">
+        <div className={`h-3 w-24 rounded-full ${skeletonBg}`} />
+        <div className={`h-4 w-4 rounded-md ${skeletonBg}`} />
+      </div>
+      <div className={`h-5 w-2/3 rounded-lg ${skeletonBg}`} />
+      <div className="space-y-1.5">
+        <div className={`h-3 w-full rounded-md ${skeletonBg}`} />
+        <div className={`h-3 w-3/4 rounded-md ${skeletonBg}`} />
+      </div>
+      <div className={`pt-3 border-t ${isDark ? 'border-white/10' : 'border-slate-100'}`}>
+        <div className={`h-2.5 w-28 rounded-full ${skeletonBg}`} />
+      </div>
+    </div>
+  );
+}
+
+// Internal Helper Components
+function StatCard({
+  icon,
+  color,
+  label,
+  value,
+  loading,
+  active = false,
+  onClick,
+  isDark,
+}: {
+  icon: React.ReactNode;
+  color: string;
+  label: string;
+  value: number;
+  loading: boolean;
+  active?: boolean;
+  onClick?: () => void;
+  isDark: boolean;
+}) {
+  const colorMap: Record<string, { bg: string; text: string; ring: string }> = {
+    orange: { bg: 'bg-orange-500/10', text: 'text-orange-500', ring: 'ring-2 ring-orange-500/50' },
+    amber: { bg: 'bg-amber-500/10', text: 'text-amber-500', ring: 'ring-2 ring-amber-500/50' },
+    rose: { bg: 'bg-rose-500/10', text: 'text-rose-500', ring: '' },
+    purple: { bg: 'bg-purple-500/10', text: 'text-purple-500', ring: '' },
+    sky: { bg: 'bg-sky-500/10', text: 'text-sky-500', ring: 'ring-2 ring-sky-500/50' },
+  };
+
+  const current = colorMap[color] || colorMap.orange;
+
+  return (
+    <div
+      onClick={onClick}
+      className={`p-5 rounded-3xl border flex items-center gap-4 transition ${
+        onClick ? 'cursor-pointer' : ''
+      } ${active ? current.ring : ''} ${
+        isDark 
+          ? 'bg-[#1E1E1E] border-white/10 text-white hover:border-white/30' 
+          : 'bg-white border-slate-200 text-slate-900 hover:border-slate-400 shadow-sm'
+      }`}
+    >
+      <div className={`p-3 rounded-2xl ${current.bg} ${current.text}`}>
+        {icon}
+      </div>
+      <div>
+        <div className="text-2xl font-bold font-serif">
+          {loading ? (
+            <div className={`h-6 w-8 rounded-md animate-pulse ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
+          ) : (
+            value
+          )}
+        </div>
+        <div className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{label}</div>
+      </div>
+    </div>
+  );
+}
+
+function TabButton({
+  label,
+  count,
+  active,
+  onClick,
+  activeColor,
+  badgeBg,
+  isDark,
+  loading = false,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+  activeColor: string;
+  badgeBg?: string;
+  isDark: boolean;
+  loading?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`pb-3 transition relative flex items-center gap-2 ${
+        active
+          ? `${activeColor} border-b-2`
+          : isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
+      }`}
+    >
+      <span>{label}</span>
+      {loading ? (
+        <span className={`w-5 h-3.5 rounded-full animate-pulse ${isDark ? 'bg-white/10' : 'bg-slate-200'}`} />
+      ) : (
+        <span className={`px-2 py-0.5 text-[10px] rounded-full font-mono ${
+          badgeBg ? badgeBg : isDark ? 'bg-white/10 text-slate-300' : 'bg-slate-200 text-slate-700'
+        }`}>
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function PostCard({
+  post,
+  isDraft = false,
+  isDark,
+  deletingPostId,
+  onDeleteConfirm,
+  onDeleteCancel,
+  onDeleteInit,
+  onTogglePrivate,
+  formatDate,
+}: {
+  post: MyPost;
+  isDraft?: boolean;
+  isDark: boolean;
+  deletingPostId: number | null;
+  onDeleteConfirm: (id: number) => void;
+  onDeleteCancel: () => void;
+  onDeleteInit: (id: number) => void;
+  onTogglePrivate: (id: number, status: boolean) => void;
+  formatDate: (dateStr?: string) => string;
+}) {
+  return (
+    <article
+      className={`p-6 rounded-3xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+        isDark 
+          ? 'bg-[#1E1E1E] border-white/10 text-white' 
+          : 'bg-white border-slate-200 text-slate-900 shadow-sm'
+      }`}
+    >
+      <div className="space-y-2 max-w-xl">
+        <div className="flex items-center gap-2 text-[10px]">
+          <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>
+            {isDraft ? `Saved ${formatDate(post.created_at)}` : formatDate(post.created_at)}
+          </span>
+          <span className={isDark ? 'text-slate-600' : 'text-slate-300'}>•</span>
+          <span className={`px-2 py-0.5 rounded-full font-medium ${
+            isDraft 
+              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' 
+              : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+          }`}>
+            {isDraft ? 'Private Draft' : 'Published'}
+          </span>
+        </div>
+
+        <h3 className="font-serif text-lg font-bold">
+          <Link 
+            to={isDraft ? `/edit/${post.post_id}` : `/post/${post.post_id}`} 
+            className={`transition ${isDark ? 'hover:text-orange-400' : 'hover:text-orange-600'}`}
+          >
+            {post.title || 'Untitled Draft'}
+          </Link>
+        </h3>
+
+        <p className={`text-xs line-clamp-2 leading-relaxed ${
+          isDark ? 'text-slate-400' : 'text-slate-600'
+        }`}>
+          {post.excerpt || 'No summary excerpt added yet.'}
+        </p>
+
+        {!isDraft && (
+          <div className={`flex items-center gap-4 pt-1 text-xs ${
+            isDark ? 'text-slate-400' : 'text-slate-500'
+          }`}>
+            <span className="flex items-center gap-1">
+              <Heart className="w-3.5 h-3.5" />
+              {post.likes_count || 0}
+            </span>
+            <span className="flex items-center gap-1">
+              <MessageSquare className="w-3.5 h-3.5" />
+              {post.comments_count || 0}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className={`flex items-center gap-2 pt-2 sm:pt-0 border-t sm:border-0 ${
+        isDark ? 'border-white/10' : 'border-slate-100'
+      }`}>
+        {deletingPostId === post.post_id ? (
+          <div className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/30 p-1.5 rounded-2xl animate-fade-in">
+            <span className="text-[11px] font-semibold text-rose-500 px-2">Delete?</span>
+            <button
+              onClick={() => onDeleteConfirm(post.post_id)}
+              className="px-3 py-1 bg-rose-500 text-white rounded-xl text-xs font-bold hover:bg-rose-600 transition"
+            >
+              Confirm
+            </button>
+            <button
+              onClick={onDeleteCancel}
+              className={`p-1 rounded-xl text-xs transition ${
+                isDark ? 'hover:bg-white/10 text-slate-300' : 'hover:bg-slate-100 text-slate-600'
+              }`}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          <>
+            {isDraft ? (
+              <button
+                onClick={() => onTogglePrivate(post.post_id, post.is_private)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-xl text-xs font-bold transition"
+                title="Publish directly to public feed"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Publish</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => onTogglePrivate(post.post_id, post.is_private)}
+                title="Unpublish to Drafts"
+                className={`p-2 rounded-xl border text-xs transition ${
+                  isDark ? 'border-white/10 hover:bg-white/10' : 'border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                <EyeOff className="w-4 h-4 text-amber-500" />
+              </button>
+            )}
+
+            <Link
+              to={`/edit/${post.post_id}`}
+              title="Edit Essay"
+              className={`p-2 rounded-xl border text-xs transition ${
+                isDark 
+                  ? 'border-white/10 hover:bg-white/10 text-slate-200' 
+                  : 'border-slate-200 hover:bg-slate-100 text-slate-700'
+              }`}
+            >
+              <Edit3 className="w-4 h-4" />
+            </Link>
+
+            <button
+              onClick={() => onDeleteInit(post.post_id)}
+              title="Delete Essay"
+              className="p-2 rounded-xl border border-rose-500/20 text-rose-500 hover:bg-rose-500/10 transition text-xs"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function EmptyState({
+  icon,
+  message,
+  actionLabel,
+  actionTo,
+  isDark,
+}: {
+  icon: React.ReactNode;
+  message: string;
+  actionLabel?: string;
+  actionTo?: string;
+  isDark: boolean;
+}) {
+  return (
+    <div className={`p-10 text-center rounded-3xl border space-y-3 ${
+      isDark ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-slate-200 shadow-sm'
+    }`}>
+      {icon}
+      <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+        {message}
+      </p>
+      {actionLabel && actionTo && (
+        <Link
+          to={actionTo}
+          className="inline-block px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-full text-xs font-bold transition"
+        >
+          {actionLabel}
+        </Link>
+      )}
     </div>
   );
 }

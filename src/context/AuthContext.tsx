@@ -22,7 +22,10 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    const savedUser = localStorage.getItem('user');
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -36,11 +39,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         const { data } = await API.get('/auth/me');
         setUser(data);
-      } catch (err) {
+        localStorage.setItem('user', JSON.stringify(data));
+      } catch (err: any) {
         console.error('Session restoration failed:', err);
-        localStorage.removeItem('token');
-        setToken(null);
-        setUser(null);
+
+        // Only kick user out if token is invalid or expired (401/403)
+        // Keep state intact on server errors (500)
+        if (err.response?.status === 401 || err.response?.status === 403) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          setToken(null);
+          setUser(null);
+        }
       } finally {
         setLoading(false);
       }
@@ -51,22 +61,39 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const login = async (emailOrUsername: string, password: string) => {
     const { data } = await API.post('/auth/login', { emailOrUsername, password });
-    localStorage.setItem('token', data.token);
-    setToken(data.token);
-    setUser(data.user);
+    
+    if (data.token) {
+      localStorage.setItem('token', data.token);
+      setToken(data.token);
+    }
+    
+    if (data.user) {
+      localStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
+    }
+
     return data;
   };
 
   const register = async (userData: any) => {
     const { data } = await API.post('/auth/register', userData);
-    localStorage.setItem('token', data.token);
-    setToken(data.token);
-    setUser(data.user);
+    
+    if (data.token) {
+      localStorage.setItem('token', data.token);
+      setToken(data.token);
+    }
+    
+    if (data.user) {
+      localStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
+    }
+
     return data;
   };
 
   const logout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem('user');
     setToken(null);
     setUser(null);
   };

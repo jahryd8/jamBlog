@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
-import { Heart, Bookmark, Users, Compass } from 'lucide-react';
+import { Heart, Bookmark, Users, Compass, Loader2 } from 'lucide-react';
 import FollowingModal from '../components/FollowingModal';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+import API from '../api/axios';
 
 interface FeedPost {
   post_id: number;
@@ -18,46 +17,81 @@ interface FeedPost {
   is_saved: boolean;
 }
 
+const PAGE_LIMIT = 5;
+
 export default function Feed() {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
   const [posts, setPosts] = useState<FeedPost[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'following'>('all');
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  const getAuthToken = () => localStorage.getItem('token') || localStorage.getItem('accessToken');
+  const storedUser = localStorage.getItem('user');
+  const currentUser = storedUser ? JSON.parse(storedUser) : null;
 
-  const fetchFeed = async (activeFilter: 'all' | 'following') => {
+  // IntersectionObserver reference for detecting bottom of feed
+  const observer = useRef<IntersectionObserver | null>(null);
+
+  const lastPostRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (loading) return;
+      if (observer.current) observer.current.disconnect();
+
+      observer.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting && hasMore) {
+          setPage((prevPage) => prevPage + 1);
+        }
+      });
+
+      if (node) observer.current.observe(node);
+    },
+    [loading, hasMore]
+  );
+
+  // Fetch feed items on filter change or page increment
+  useEffect(() => {
+    const controller = new AbortController();
     setLoading(true);
-    const token = getAuthToken();
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    };
 
-    try {
-      const res = await fetch(`${API_BASE}/feed?filter=${activeFilter}`, { headers });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) setPosts(data);
-      }
-    } catch (err) {
-      console.error('Error loading feed:', err);
-    } finally {
-      setLoading(false);
-    }
+    API.get(`/feed?filter=${filter}&page=${page}&limit=${PAGE_LIMIT}`, {
+      signal: controller.signal,
+    })
+      .then((res) => {
+        const fetchedPosts: FeedPost[] = Array.isArray(res.data) ? res.data : res.data.posts || [];
+
+        setPosts((prev) => (page === 1 ? fetchedPosts : [...prev, ...fetchedPosts]));
+        setHasMore(fetchedPosts.length === PAGE_LIMIT);
+        setLoading(false);
+        setInitialLoading(false);
+      })
+      .catch((err) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        console.error('Error fetching feed:', err);
+        setLoading(false);
+        setInitialLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [filter, page]);
+
+  // Handle switching tabs
+  const handleFilterChange = (newFilter: 'all' | 'following') => {
+    if (newFilter === filter) return;
+    setFilter(newFilter);
+    setPosts([]);
+    setPage(1);
+    setHasMore(true);
+    setInitialLoading(true);
   };
 
-  useEffect(() => {
-    fetchFeed(filter);
-  }, [filter]);
-
   const handleToggleLike = async (postId: number) => {
-    const token = getAuthToken();
-
-    // Optimistic UI update
     setPosts((prev) =>
       prev.map((p) => {
         if (p.post_id === postId) {
@@ -74,61 +108,21 @@ export default function Feed() {
     );
 
     try {
-      const res = await fetch(`${API_BASE}/posts/${postId}/like`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-
-      if (!res.ok) {
-        console.error(`Failed to like post: ${res.status}`);
-        // Revert on failure
-        fetchFeed(filter);
-      }
+      await API.post(`/posts/${postId}/like`);
     } catch (err) {
       console.error('Failed to toggle like:', err);
-      fetchFeed(filter);
     }
   };
 
   const handleToggleSave = async (postId: number) => {
-    const token = getAuthToken();
-
-    // Optimistic UI update
     setPosts((prev) =>
       prev.map((p) => (p.post_id === postId ? { ...p, is_saved: !p.is_saved } : p))
     );
 
     try {
-      // Endpoint updated to /bookmark (or /save fallback)
-      const res = await fetch(`${API_BASE}/posts/${postId}/bookmark`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-
-      if (!res.ok) {
-        // Fallback check if server routes it under /save
-        const fallbackRes = await fetch(`${API_BASE}/posts/${postId}/save`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-        });
-
-        if (!fallbackRes.ok) {
-          console.error(`Failed to save post: ${res.status}`);
-          fetchFeed(filter);
-        }
-      }
+      await API.post(`/posts/${postId}/bookmark`);
     } catch (err) {
       console.error('Failed to toggle save:', err);
-      fetchFeed(filter);
     }
   };
 
@@ -140,7 +134,7 @@ export default function Feed() {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
-      {/* Feed Filters Header */}
+      {/* Header & Controls */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-current/10 pb-4">
         <div>
           <h1 className={`font-serif text-3xl font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
@@ -152,7 +146,7 @@ export default function Feed() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsModalOpen(true)}
-            className="px-3.5 py-2 rounded-full text-xs font-semibold border border-current/20 hover:border-orange-500 transition"
+            className="px-3.5 py-2 rounded-full text-xs font-semibold border border-current/20 hover:border-brand-terracotta transition"
           >
             Manage Following
           </button>
@@ -163,9 +157,9 @@ export default function Feed() {
             }`}
           >
             <button
-              onClick={() => setFilter('all')}
+              onClick={() => handleFilterChange('all')}
               className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition ${
-                filter === 'all' ? 'bg-orange-600 text-white' : 'opacity-70 hover:opacity-100'
+                filter === 'all' ? 'bg-brand-terracotta text-white' : 'opacity-70 hover:opacity-100'
               }`}
             >
               <Compass className="w-3.5 h-3.5" />
@@ -173,9 +167,9 @@ export default function Feed() {
             </button>
 
             <button
-              onClick={() => setFilter('following')}
+              onClick={() => handleFilterChange('following')}
               className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition ${
-                filter === 'following' ? 'bg-orange-600 text-white' : 'opacity-70 hover:opacity-100'
+                filter === 'following' ? 'bg-brand-terracotta text-white' : 'opacity-70 hover:opacity-100'
               }`}
             >
               <Users className="w-3.5 h-3.5" />
@@ -185,8 +179,8 @@ export default function Feed() {
         </div>
       </div>
 
-      {/* Posts Feed Grid */}
-      {loading ? (
+      {/* Feed Stream */}
+      {initialLoading ? (
         <div className="p-12 text-center font-serif text-sm opacity-60">Loading publication feed...</div>
       ) : posts.length === 0 ? (
         <div
@@ -202,59 +196,85 @@ export default function Feed() {
         </div>
       ) : (
         <div className="space-y-6">
-          {posts.map((post) => (
-            <article
-              key={post.post_id}
-              className={`p-6 sm:p-8 rounded-3xl border transition-all shadow-sm ${
-                isDark
-                  ? 'bg-[#1E1E1E] border-white/10 text-white'
-                  : 'bg-white border-black/10 text-slate-900'
-              }`}
-            >
-              <div className="flex items-center justify-between text-xs opacity-60 mb-3">
-                <Link to={`/author/${post.username}`} className="hover:text-orange-500 font-medium transition">
-                  By {post.display_name || post.username}
-                </Link>
-                <span>{formatDate(post.created_at)}</span>
-              </div>
+          {posts.map((post, index) => {
+            const isLastPost = posts.length === index + 1;
 
-              <h2 className="font-serif text-2xl font-bold mb-3">
-                <Link to={`/post/${post.post_id}`} className="hover:text-orange-500 transition">
-                  {post.title}
-                </Link>
-              </h2>
+            return (
+              <article
+                key={post.post_id}
+                ref={isLastPost ? lastPostRef : null}
+                className={`p-6 sm:p-8 rounded-3xl border transition-all shadow-sm ${
+                  isDark
+                    ? 'bg-[#1E1E1E] border-white/10 text-white'
+                    : 'bg-white border-black/10 text-slate-900'
+                }`}
+              >
+                <div className="flex items-center justify-between text-xs opacity-60 mb-3">
+                  <Link
+                    to={`/author/${post.username}`}
+                    className="hover:text-brand-terracotta font-medium transition"
+                  >
+                    By {post.display_name || post.username}
+                  </Link>
+                  <span>{formatDate(post.created_at)}</span>
+                </div>
 
-              <p className="text-sm opacity-80 leading-relaxed mb-6">{post.excerpt}</p>
+                <h2 className="font-serif text-2xl font-bold mb-3">
+                  <Link to={`/post/${post.post_id}`} className="hover:text-brand-terracotta transition">
+                    {post.title}
+                  </Link>
+                </h2>
 
-              {/* Interactive Bar */}
-              <div className="flex items-center justify-between pt-4 border-t border-current/10 text-xs">
-                <button
-                  onClick={() => handleToggleLike(post.post_id)}
-                  className={`flex items-center gap-1.5 transition ${
-                    post.is_liked ? 'text-rose-500 font-bold' : 'opacity-60 hover:opacity-100'
-                  }`}
-                >
-                  <Heart className={`w-4 h-4 ${post.is_liked ? 'fill-rose-500' : ''}`} />
-                  <span>{post.likes_count} Likes</span>
-                </button>
+                <p className="text-sm opacity-80 leading-relaxed mb-6">{post.excerpt}</p>
 
-                <button
-                  onClick={() => handleToggleSave(post.post_id)}
-                  className={`flex items-center gap-1.5 transition ${
-                    post.is_saved ? 'text-amber-500 font-bold' : 'opacity-60 hover:opacity-100'
-                  }`}
-                >
-                  <Bookmark className={`w-4 h-4 ${post.is_saved ? 'fill-amber-500' : ''}`} />
-                  <span>{post.is_saved ? 'Saved' : 'Save'}</span>
-                </button>
-              </div>
-            </article>
-          ))}
+                {/* Interactive Bar */}
+                <div className="flex items-center justify-between pt-4 border-t border-current/10 text-xs">
+                  <button
+                    onClick={() => handleToggleLike(post.post_id)}
+                    className={`flex items-center gap-1.5 transition ${
+                      post.is_liked ? 'text-rose-500 font-bold' : 'opacity-60 hover:opacity-100'
+                    }`}
+                  >
+                    <Heart className={`w-4 h-4 ${post.is_liked ? 'fill-rose-500' : ''}`} />
+                    <span>{post.likes_count} Likes</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleToggleSave(post.post_id)}
+                    className={`flex items-center gap-1.5 transition ${
+                      post.is_saved ? 'text-amber-500 font-bold' : 'opacity-60 hover:opacity-100'
+                    }`}
+                  >
+                    <Bookmark className={`w-4 h-4 ${post.is_saved ? 'fill-amber-500' : ''}`} />
+                    <span>{post.is_saved ? 'Saved' : 'Save'}</span>
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
 
+      {/* Infinite Scroll Spinner / End State */}
+      {loading && !initialLoading && (
+        <div className="flex items-center justify-center gap-2 py-6 opacity-60 text-xs">
+          <Loader2 className="w-4 h-4 animate-spin text-brand-terracotta" />
+          <span>Fetching more essays...</span>
+        </div>
+      )}
+
+      {!hasMore && posts.length > 0 && (
+        <p className="text-center py-6 text-xs opacity-40 font-mono">
+          You've reached the end of the publication feed.
+        </p>
+      )}
+
       {/* Following Modal */}
-      <FollowingModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+      <FollowingModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        userId={currentUser?.user_id}
+      />
     </div>
   );
 }

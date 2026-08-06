@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import html2canvas from 'html2canvas';
+import API from '../api/axios';
 import { useTheme } from '../context/ThemeContext';
 import { 
   Download, 
@@ -19,10 +20,12 @@ import {
 export default function CreateStudio() {
   const { theme } = useTheme();
   const navigate = useNavigate();
-  const { id } = useParams<{ id?: string }>(); // Detect if editing an existing essay
+  const { id } = useParams<{ id?: string }>();
   const isEditMode = Boolean(id);
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  // Separate Action Loading States
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
   const [isLoadingPost, setIsLoadingPost] = useState(false);
   
   // Editor State
@@ -30,22 +33,19 @@ export default function CreateStudio() {
   const [content, setContent] = useState('');
   const [excerpt, setExcerpt] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
-  const [isDraft, setIsDraft] = useState(false); // Draft state tracking
+  const [isDraft, setIsDraft] = useState(false);
 
   // Poster Customization State
   const [posterStyle, setPosterStyle] = useState<'minimal' | 'bold' | 'editorial'>('minimal');
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // Ref for Poster Element (for HTML2Canvas export)
   const posterRef = useRef<HTMLDivElement>(null);
 
-  // 1. Fetch Post Data if in Edit Mode
   useEffect(() => {
     if (!id) {
-      // Defaults for brand new posts
       setTitle('The Psychology of Authentic Writing');
       setContent(
-        'In an era dominated by 15-second clips and algorithmic feeds, deep writing gives us the space to process nuanced thoughts. Providing a brand or person with specific character traits makes it more human. A clearly defined personality generates deep attachment among its audience.'
+        'In an era dominated by 15-second clips and algorithmic feeds, deep writing gives us the space to process nuanced thoughts.'
       );
       setExcerpt('In an era dominated by 15-second clips, deep writing gives us the space to process nuanced thoughts.');
       setIsDraft(false);
@@ -56,20 +56,17 @@ export default function CreateStudio() {
     const fetchPostToEdit = async () => {
       setIsLoadingPost(true);
       try {
-        const response = await fetch(`http://localhost:5000/api/posts/${id}`);
-        if (response.ok) {
-          const postData = await response.json();
-          setTitle(postData.title || '');
-          setContent(postData.content || '');
-          setExcerpt(postData.excerpt || '');
-          setIsPrivate(postData.is_private ?? false);
-          setIsDraft(postData.is_draft ?? false);
-        } else {
-          alert('Could not fetch essay data for editing.');
-          navigate('/dashboard');
-        }
+        const response = await API.get(`/posts/${id}`);
+        const postData = response.data;
+        setTitle(postData.title || '');
+        setContent(postData.content || '');
+        setExcerpt(postData.excerpt || '');
+        setIsPrivate(postData.is_private ?? false);
+        setIsDraft(postData.is_draft ?? false);
       } catch (err) {
         console.error('Error fetching essay to edit:', err);
+        alert('Could not fetch essay data for editing.');
+        navigate('/dashboard');
       } finally {
         setIsLoadingPost(false);
       }
@@ -78,110 +75,181 @@ export default function CreateStudio() {
     fetchPostToEdit();
   }, [id, navigate]);
 
-  // Export Poster as PNG
+  // Handle Export Poster image via html2canvas
   const handleExportPoster = async () => {
+  if (!posterRef.current) return;
+  setIsGenerating(true);
+
+  try {
+    const element = posterRef.current;
+
+    const canvas = await html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+      logging: false,
+      allowTaint: true,
+      backgroundColor: null,
+      onclone: (clonedDoc) => {
+        const clonedPoster = clonedDoc.querySelector('[data-poster-root]') as HTMLElement;
+        if (!clonedPoster) return;
+
+        // 1. Force explicit hex base styling on root poster container
+        if (posterStyle === 'minimal') {
+          clonedPoster.style.backgroundColor = '#FDFBF7';
+          clonedPoster.style.color = '#1A1A1A';
+        } else if (posterStyle === 'bold') {
+          clonedPoster.style.backgroundColor = '#E85D04';
+          clonedPoster.style.color = '#FFFFFF';
+        } else {
+          clonedPoster.style.backgroundColor = '#1A1A1A';
+          clonedPoster.style.color = '#FDFBF7';
+        }
+
+        // 2. Walk every child node and purge oklab/oklch values across all color properties
+        const allNodes = [clonedPoster, ...Array.from(clonedPoster.querySelectorAll('*'))];
+        
+        allNodes.forEach((node) => {
+          const el = node as HTMLElement;
+          const computed = window.getComputedStyle(el);
+
+          // Purge box shadows using modern color functions
+          if (computed.boxShadow.includes('oklab') || computed.boxShadow.includes('oklch')) {
+            el.style.boxShadow = 'none';
+          }
+
+          // Convert borders containing oklab to standard RGBA
+          if (computed.borderColor.includes('oklab') || computed.borderColor.includes('oklch')) {
+            el.style.borderColor = 'rgba(128, 128, 128, 0.2)';
+          }
+
+          // Strip outline colors
+          if (computed.outlineColor.includes('oklab') || computed.outlineColor.includes('oklch')) {
+            el.style.outlineColor = 'transparent';
+          }
+
+          // Override text colors if evaluating to oklab
+          if (computed.color.includes('oklab') || computed.color.includes('oklch')) {
+            el.style.color = posterStyle === 'bold' ? '#FFFFFF' : posterStyle === 'editorial' ? '#FDFBF7' : '#1A1A1A';
+          }
+        });
+      },
+    });
+
+    const image = canvas.toDataURL('image/png');
+    const link = document.createElement('a');
+    const safeTitle = (title || 'untitled-essay')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    link.href = image;
+    link.download = `${safeTitle}-poster.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch (err) {
+    console.error('Failed to generate poster:', err);
+    alert('Could not generate image poster.');
+  } finally {
+    setIsGenerating(false);
+  }
+};
+
+  // Web Share API support
+  const handleNativeShare = async () => {
     if (!posterRef.current) return;
     setIsGenerating(true);
+
     try {
-      const canvas = await html2canvas(posterRef.current, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: null,
-      });
-      const image = canvas.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.href = image;
-      link.download = `${title.toLowerCase().replace(/\s+/g, '-')}-poster.png`;
-      link.click();
+      const element = posterRef.current;
+      const canvas = await html2canvas(element, { scale: 2, useCORS: true });
+      
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          setIsGenerating(false);
+          return;
+        }
+
+        const file = new File([blob], `${title || 'essay'}-poster.png`, { type: 'image/png' });
+
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            title: title || 'JamBlog Poster',
+            text: excerpt || title,
+            files: [file],
+          });
+        } else if (navigator.share) {
+          await navigator.share({
+            title: title || 'JamBlog Poster',
+            text: excerpt || title,
+            url: window.location.href,
+          });
+        } else {
+          alert('Native sharing is not supported in this browser. Use the download button instead.');
+        }
+        setIsGenerating(false);
+      }, 'image/png');
     } catch (err) {
-      console.error('Failed to generate poster:', err);
-    } finally {
+      console.error('Native share failed:', err);
       setIsGenerating(false);
     }
   };
 
-  // Web Share API (Native Sheet)
-  const handleNativeShare = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: title,
-          text: excerpt,
-          url: window.location.href,
-        });
-      } catch (err) {
-        console.log('Share canceled or failed', err);
-      }
-    } else {
-      alert('Native sharing is not supported on this browser. Link copied to clipboard!');
-      navigator.clipboard.writeText(window.location.href);
-    }
-  };
-
-  // Share to X
+  // Share link directly to X (Twitter)
   const handleShareToX = () => {
-    const text = encodeURIComponent(`"${excerpt}" — from my latest essay "${title}" on JamBlog`);
+    const text = encodeURIComponent(`"${excerpt || title}" — read more on JamBlog:`);
     const url = encodeURIComponent(window.location.href);
     window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank');
   };
 
-  // 2. Publish, Update, or Save Draft
   const handleSave = async (saveAsDraft: boolean) => {
     if (!title.trim() || !content.trim()) {
       alert('Please fill out both the title and content!');
       return;
     }
 
-    setIsSubmitting(true);
+    if (saveAsDraft) {
+      setIsSavingDraft(true);
+    } else {
+      setIsPublishing(true);
+    }
 
-    const endpoint = isEditMode
-      ? `http://localhost:5000/api/posts/${id}`
-      : 'http://localhost:5000/api/posts';
-
-    const method = isEditMode ? 'PUT' : 'POST';
-
-    // If saving as draft, force is_private to true so it doesn't leak to public feed
+    const endpoint = isEditMode ? `/posts/${id}` : '/posts';
     const finalIsPrivate = saveAsDraft ? true : isPrivate;
 
+    const payload = {
+      title: title.trim(),
+      content: content.trim(),
+      excerpt: (excerpt || title).trim(),
+      is_private: finalIsPrivate,
+      is_draft: saveAsDraft,
+    };
+
     try {
-      const response = await fetch(endpoint, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          user_id: 1,
-          title,
-          content,
-          excerpt: excerpt || title,
-          is_private: finalIsPrivate,
-          is_draft: saveAsDraft, // Explicitly false when Publishing, true when saving Draft
-        }),
-      });
-
-      if (response.ok) {
-        setIsDraft(saveAsDraft); // Keeps local state in sync
-        setIsPrivate(finalIsPrivate);
-
-        let toastMessage = 'Essay published successfully!';
-        if (saveAsDraft) {
-          toastMessage = 'Draft saved successfully!';
-        } else if (isEditMode) {
-          toastMessage = 'Essay updated successfully!';
-        }
-
-        navigate('/dashboard', {
-          state: { message: toastMessage },
-        });
+      if (isEditMode) {
+        await API.put(endpoint, payload);
       } else {
-        const errorData = await response.json();
-        alert(`Failed to save: ${errorData.message || 'Server error'}`);
+        await API.post(endpoint, payload);
       }
-    } catch (err) {
-      console.error('Save error:', err);
-      alert('Could not connect to the server. Is express running on port 5000?');
+
+      setIsDraft(saveAsDraft);
+      setIsPrivate(finalIsPrivate);
+
+      const toastMessage = saveAsDraft
+        ? 'Draft saved successfully!'
+        : isEditMode
+        ? 'Essay updated successfully!'
+        : 'Essay published successfully!';
+
+      navigate('/dashboard', { state: { message: toastMessage } });
+    } catch (err: any) {
+      console.error('Save error details:', err.response?.data || err);
+      const serverMsg = err.response?.data?.error || err.response?.data?.message || err.message;
+      alert(`Failed to save (500 Server Error): ${serverMsg}`);
     } finally {
-      setIsSubmitting(false);
+      setIsSavingDraft(false);
+      setIsPublishing(false);
     }
   };
 
@@ -195,7 +263,6 @@ export default function CreateStudio() {
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 space-y-8">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className={`font-serif text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-brand-ink'}`}>
@@ -211,8 +278,8 @@ export default function CreateStudio() {
         {isEditMode && (
           <button
             type="button"
-            onClick={() => navigate('/dashboard', { state: { message: 'Cancelled update.' } })}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition ${
+            onClick={() => navigate('/dashboard')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition cursor-pointer ${
               theme === 'dark' ? 'border-white/10 hover:bg-white/10' : 'border-black/10 hover:bg-black/5'
             }`}
           >
@@ -223,9 +290,8 @@ export default function CreateStudio() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        {/* Left Column: Essay & Excerpt Form */}
+        {/* Left Column: Form Editor */}
         <div className="lg:col-span-7 bg-[#E5E3DD] text-[#1A1A1A] p-6 rounded-3xl border border-black/10 shadow-sm space-y-6">
-          {/* Title Input */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-[#1A1A1A]/60 mb-2">
               Article Title
@@ -239,7 +305,6 @@ export default function CreateStudio() {
             />
           </div>
 
-          {/* Full Content Area */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-[#1A1A1A]/60 mb-2">
               Full Article Content
@@ -253,7 +318,6 @@ export default function CreateStudio() {
             />
           </div>
 
-          {/* Featured Excerpt Input */}
           <div>
             <label className="block text-xs uppercase tracking-wider text-brand-terracotta mb-2 font-bold flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5" />
@@ -268,14 +332,12 @@ export default function CreateStudio() {
             />
           </div>
 
-          {/* Controls: Visibility Toggle, Draft State & Save/Publish Actions */}
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-black/10">
-            {/* Toggles Group */}
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setIsPrivate(!isPrivate)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-semibold border transition cursor-pointer ${
                   isPrivate 
                     ? 'bg-amber-100 text-amber-900 border-amber-300' 
                     : 'bg-emerald-100 text-emerald-900 border-emerald-300'
@@ -293,27 +355,26 @@ export default function CreateStudio() {
               )}
             </div>
 
-            {/* Action Buttons */}
             <div className="flex items-center gap-2">
               <button 
                 type="button"
                 onClick={() => handleSave(true)}
-                disabled={isSubmitting}
+                disabled={isSavingDraft || isPublishing}
                 className="flex items-center gap-1.5 bg-black/10 hover:bg-black/20 text-[#1A1A1A] disabled:opacity-50 font-bold text-xs uppercase tracking-wider px-4 py-3 rounded-full transition cursor-pointer"
               >
                 <Save className="w-4 h-4" />
-                <span>{isSubmitting ? 'Saving...' : 'Save Draft'}</span>
+                <span>{isSavingDraft ? 'Saving...' : 'Save Draft'}</span>
               </button>
 
               <button 
                 type="button"
                 onClick={() => handleSave(false)}
-                disabled={isSubmitting}
+                disabled={isSavingDraft || isPublishing}
                 className="flex items-center gap-1.5 bg-brand-terracotta hover:bg-brand-terracotta/90 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider px-6 py-3 rounded-full shadow-md transition cursor-pointer"
               >
                 <Send className="w-4 h-4" />
                 <span>
-                  {isSubmitting
+                  {isPublishing
                     ? 'Processing...'
                     : isEditMode
                     ? 'Update Essay'
@@ -324,9 +385,8 @@ export default function CreateStudio() {
           </div>
         </div>
 
-        {/* Right Column: Visual Poster Generator */}
+        {/* Right Column: Poster Preview & Sharing */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Style Selector Toolbar */}
           <div className={`p-4 rounded-2xl border shadow-sm ${
             theme === 'dark' ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-brand-ink/10'
           }`}>
@@ -340,7 +400,7 @@ export default function CreateStudio() {
                   key={style}
                   type="button"
                   onClick={() => setPosterStyle(style)}
-                  className={`py-2 text-xs font-semibold rounded-xl capitalize transition ${
+                  className={`py-2 text-xs font-semibold rounded-xl capitalize transition cursor-pointer ${
                     posterStyle === style 
                       ? 'bg-brand-terracotta text-white shadow-sm' 
                       : theme === 'dark'
@@ -354,9 +414,9 @@ export default function CreateStudio() {
             </div>
           </div>
 
-          {/* Live Rendered Canvas Poster */}
           <div 
             ref={posterRef}
+            data-poster-root="true"
             className={`p-8 rounded-3xl aspect-[4/5] flex flex-col justify-between shadow-xl border transition-all ${
               posterStyle === 'minimal' 
                 ? 'bg-[#FDFBF7] text-[#1A1A1A] border-black/10' 
@@ -376,7 +436,7 @@ export default function CreateStudio() {
               </p>
             </div>
 
-            <div className="pt-6 border-t border-current/20 flex items-center justify-between text-xs">
+            <div className="pt-6 border-t border-black/20 flex items-center justify-between text-xs">
               <div>
                 <p className="font-serif font-bold text-sm">{title || 'Untitled Essay'}</p>
                 <p className="opacity-70 text-[11px]">by Author</p>
@@ -387,8 +447,7 @@ export default function CreateStudio() {
             </div>
           </div>
 
-          {/* Download & Sharing Actions */}
-          <div className={`p-4 rounded-2xl border shadow-sm ${
+          <div className={`p-4 rounded-2xl border shadow-sm space-y-4 ${
             theme === 'dark' ? 'bg-[#1E1E1E] border-white/10' : 'bg-white border-brand-ink/10'
           }`}>
             <button
@@ -402,7 +461,7 @@ export default function CreateStudio() {
             </button>
 
             {/* Instant Share Options */}
-            <div className="w-full mt-4 pt-4 border-t border-current/10">
+            <div className="w-full pt-3 border-t border-black/10 dark:border-white/10">
               <p className="text-[11px] font-bold uppercase tracking-wider opacity-50 mb-3 text-center">
                 Instant Share Options
               </p>
@@ -412,12 +471,12 @@ export default function CreateStudio() {
                   type="button"
                   onClick={handleNativeShare}
                   disabled={isGenerating}
-                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-2xl text-xs font-semibold border transition ${
+                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-2xl text-xs font-semibold border transition cursor-pointer ${
                     theme === 'dark'
                       ? 'bg-white/5 hover:bg-white/10 border-white/10 text-white'
                       : 'bg-brand-cream hover:bg-brand-sage/40 border-brand-ink/10 text-brand-ink'
                   }`}
-                  title="Share via native sheet to WhatsApp, Instagram, or Mail"
+                  title="Share via native sheet"
                 >
                   <Share2 className="w-3.5 h-3.5 text-brand-terracotta" />
                   <span>Share Sheet</span>
@@ -426,7 +485,7 @@ export default function CreateStudio() {
                 <button 
                   type="button"
                   onClick={handleShareToX}
-                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-2xl text-xs font-semibold border transition ${
+                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-2xl text-xs font-semibold border transition cursor-pointer ${
                     theme === 'dark'
                       ? 'bg-white/5 hover:bg-white/10 border-white/10 text-white'
                       : 'bg-brand-cream hover:bg-brand-sky/40 border-brand-ink/10 text-brand-ink'
@@ -438,7 +497,6 @@ export default function CreateStudio() {
               </div>
             </div>
           </div>
-
         </div>
       </div>
     </div>

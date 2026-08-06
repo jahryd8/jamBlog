@@ -1,48 +1,52 @@
 import { useEffect, useState } from 'react';
 import { X, UserMinus } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import API from '../api/axios';
 
 interface FollowedUser {
   user_id: number;
   username: string;
   display_name: string;
-  bio: string;
+  bio?: string;
 }
 
 interface FollowingModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentUserId?: number;
+  userId?: number;
 }
 
-export default function FollowingModal({ isOpen, onClose, currentUserId = 1 }: FollowingModalProps) {
+export default function FollowingModal({ isOpen, onClose, userId }: FollowingModalProps) {
   const { theme } = useTheme();
   const [following, setFollowing] = useState<FollowedUser[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchFollowing = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`http://localhost:5000/api/users/${currentUserId}/following`);
-      const data = await res.json();
-      if (Array.isArray(data)) setFollowing(data);
-    } catch (err) {
-      console.error('Error fetching following list:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    if (isOpen) fetchFollowing();
-  }, [isOpen]);
+    if (!isOpen || !userId) return;
+
+    const controller = new AbortController();
+    setLoading(true);
+
+    API.get(`/users/${userId}/following`, { signal: controller.signal })
+      .then((res) => {
+        if (Array.isArray(res.data)) setFollowing(res.data);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        console.error('Error fetching following list:', err);
+        setLoading(false);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [isOpen, userId]);
 
   const handleUnfollow = async (followingId: number) => {
     try {
-      const res = await fetch(`http://localhost:5000/api/users/${followingId}/follow`, {
-        method: 'POST',
-      });
-      const data = await res.json();
+      const res = await API.post(`/users/${followingId}/follow`);
+      const data = res.data;
 
       if (!data.isFollowing) {
         setFollowing((prev) => prev.filter((user) => user.user_id !== followingId));
@@ -80,7 +84,7 @@ export default function FollowingModal({ isOpen, onClose, currentUserId = 1 }: F
             <p className="text-center py-6 text-xs opacity-60">Loading who you follow...</p>
           ) : following.length === 0 ? (
             <p className="text-center py-6 text-xs opacity-60">
-              You aren't following anyone yet! Check out the feed to discover writers.
+              This user is not following anyone yet!
             </p>
           ) : (
             following.map((user) => (
