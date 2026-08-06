@@ -48,22 +48,35 @@ export default function SearchBar() {
     }
 
     setLoading(true);
-    const timer = setTimeout(() => {
-      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
-      fetch(`${API_BASE_URL}/api/search?q=${encodeURIComponent(query)}`)
-        .then((res) => res.json())
-        .then((data) => {
-          setPosts(data.posts || []);
-          setAuthors(data.authors || []);
-          setLoading(false);
-          setIsOpen(true);
-        })
-        .catch((err) => {
-          console.error('Search error:', err);
-          setLoading(false);
-        });
-    }, 300); // 300ms debounce
+const timer = setTimeout(() => {
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+  
+  // Normalize base URL to avoid double /api
+  const baseUrl = API_BASE_URL.endsWith('/api') 
+    ? API_BASE_URL 
+    : `${API_BASE_URL}/api`;
+
+  fetch(`${baseUrl}/search?q=${encodeURIComponent(query)}`)
+    .then((res) => {
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+      return res.json();
+    })
+    .then((data) => {
+      setPosts(data.posts || []);
+      setAuthors(data.authors || []);
+      setLoading(false);
+      setIsOpen(true);
+    })
+    .catch((err) => {
+      console.error('Search error:', err);
+      setPosts([]);
+      setAuthors([]);
+      setLoading(false);
+    });
+}, 300);
 
     return () => clearTimeout(timer);
   }, [query]);

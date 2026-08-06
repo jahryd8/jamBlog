@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import html2canvas from 'html2canvas';
+import { toBlob } from 'html-to-image';
 import API from '../api/axios';
 import { useTheme } from '../context/ThemeContext';
 import { 
@@ -157,44 +158,49 @@ export default function CreateStudio() {
 };
 
   // Web Share API support
-  const handleNativeShare = async () => {
-    if (!posterRef.current) return;
-    setIsGenerating(true);
+const handleNativeShare = async () => {
+  if (!posterRef.current) return;
+  setIsGenerating(true);
 
-    try {
-      const element = posterRef.current;
-      const canvas = await html2canvas(element, { scale: 2, useCORS: true });
-      
-      canvas.toBlob(async (blob) => {
-        if (!blob) {
-          setIsGenerating(false);
-          return;
-        }
+  try {
+    // Generate PNG blob using native SVG embedding (bypasses oklab CSS parser bugs)
+    const blob = await toBlob(posterRef.current, {
+      pixelRatio: 2,
+      cacheBust: true,
+      filter: (node) => {
+        // Exclude script tags or iframe elements if any exist
+        return node.tagName !== 'SCRIPT';
+      },
+    });
 
-        const file = new File([blob], `${title || 'essay'}-poster.png`, { type: 'image/png' });
-
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            title: title || 'JamBlog Poster',
-            text: excerpt || title,
-            files: [file],
-          });
-        } else if (navigator.share) {
-          await navigator.share({
-            title: title || 'JamBlog Poster',
-            text: excerpt || title,
-            url: window.location.href,
-          });
-        } else {
-          alert('Native sharing is not supported in this browser. Use the download button instead.');
-        }
-        setIsGenerating(false);
-      }, 'image/png');
-    } catch (err) {
-      console.error('Native share failed:', err);
+    if (!blob) {
       setIsGenerating(false);
+      return;
     }
-  };
+
+    const file = new File([blob], `${title || 'essay'}-poster.png`, { type: 'image/png' });
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        title: title || 'JamBlog Poster',
+        text: excerpt || title,
+        files: [file],
+      });
+    } else if (navigator.share) {
+      await navigator.share({
+        title: title || 'JamBlog Poster',
+        text: excerpt || title,
+        url: window.location.href,
+      });
+    } else {
+      alert('Native sharing is not supported in this browser. Use the download button instead.');
+    }
+  } catch (err) {
+    console.error('Native share failed:', err);
+  } finally {
+    setIsGenerating(false);
+  }
+};
 
   // Share link directly to X (Twitter)
   const handleShareToX = () => {

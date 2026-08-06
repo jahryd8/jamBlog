@@ -136,7 +136,7 @@ app.post('/api/auth/register', async (req, res) => {
     const newUser = await pool.query(
       `INSERT INTO users (username, email, password_hash, display_name)
        VALUES ($1, $2, $3, $4)
-       RETURNING user_id, username, email, display_name, bio, avatar_url, role`,
+       RETURNING user_id, username, email, display_name, bio, avatar_url`,
       [username.trim(), email.trim(), hashedPassword, (display_name || username).trim()]
     );
 
@@ -203,7 +203,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
     }
 
     const result = await pool.query(
-      'SELECT user_id, username, email, display_name, bio, avatar_url, role FROM users WHERE user_id = $1',
+      'SELECT user_id, username, email, display_name, bio, avatar_url FROM users WHERE user_id = $1',
       [targetId]
     );
 
@@ -468,6 +468,132 @@ app.delete('/api/users/account', authenticateToken, async (req, res) => {
   } catch (err) {
     console.error('Delete account error:', err);
     res.status(500).json({ message: 'Failed to delete account.' });
+  }
+});
+
+// --- Search Route ---
+app.get('/api/search', async (req, res) => {
+  const { q } = req.query;
+
+  if (!q || !q.trim()) {
+    return res.json({ posts: [], authors: [] });
+  }
+
+  const searchTerm = `%${q.trim()}%`;
+
+  try {
+    // Search public non-draft posts matching title or content
+    const postsQuery = `
+      SELECT 
+        p.post_id, 
+        p.title, 
+        COALESCE(p.excerpt, LEFT(p.content, 200)) AS excerpt, 
+        p.created_at,
+        u.username,
+        u.display_name
+      FROM posts p
+      JOIN users u ON p.user_id = u.user_id
+      WHERE (p.title ILIKE $1 OR p.content ILIKE $1)
+        AND p.is_draft = false 
+        AND p.is_private = false
+      ORDER BY p.created_at DESC
+      LIMIT 5
+    `;
+
+    // Search users matching username or display_name
+    const authorsQuery = `
+      SELECT user_id, username, display_name, avatar_url, bio
+      FROM users
+      WHERE username ILIKE $1 OR display_name ILIKE $1
+      LIMIT 5
+    `;
+
+    const [postsRes, authorsRes] = await Promise.all([
+      pool.query(postsQuery, [searchTerm]),
+      pool.query(authorsQuery, [searchTerm]),
+    ]);
+
+    res.json({
+      posts: postsRes.rows,
+      authors: authorsRes.rows,
+    });
+  } catch (err) {
+    console.error('Search endpoint error:', err);
+    res.status(500).json({ message: 'Error performing search.' });
+  }
+});
+
+// --- Fetch Author Profile & Public Posts ---
+app.get('/api/users/:username', async (req, res) => {
+  const { username } = req.params;
+
+  try {
+    // 1. Fetch user details safely
+    const userResult = await pool.query(
+      `SELECT user_id, username, display_name, bio, avatar_url 
+       FROM users 
+       WHERE username = $1`,
+      [username]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Author not found.' });
+    }
+
+    const user = userResult.rows[0];
+
+    // 2. Fetch followers & following counts safely
+    let followersCount = '0';
+    let followingCount = '0';
+
+    try {
+      const followersRes = await pool.query(
+        `SELECT COUNT(*)::text AS count FROM follows WHERE following_id = $1`,
+        [user.user_id]
+      );
+      followersCount = followersRes.rows[0].count;
+
+      const followingRes = await pool.query(
+        `SELECT COUNT(*)::text AS count FROM follows WHERE follower_id = $1`,
+        [user.user_id]
+      );
+      followingCount = followingRes.rows[0].count;
+    } catch {
+      // If the follows table doesn't exist yet, default silently to 0
+    }
+
+    // 3. Fetch public, non-draft posts
+    const postsResult = await pool.query(
+      `SELECT 
+        post_id, 
+        title, 
+        COALESCE(excerpt, LEFT(content, 200)) AS excerpt, 
+        created_at
+       FROM posts
+       WHERE user_id = $1 AND is_draft = false AND is_private = false
+       ORDER BY created_at DESC`,
+      [user.user_id]
+    );
+
+    // Construct response matching frontend interface
+    const profile = {
+      user_id: user.user_id,
+      username: user.username,
+      display_name: user.display_name,
+      bio: user.bio || '',
+      location: user.location || '',
+      followers_count: followersCount,
+      following_count: followingCount,
+      is_following: false,
+    };
+
+    res.json({
+      profile,
+      posts: postsResult.rows,
+    });
+  } catch (err) {
+    console.error('Error fetching author profile:', err);
+    res.status(500).json({ message: 'Failed to retrieve author profile.' });
   }
 });
 
